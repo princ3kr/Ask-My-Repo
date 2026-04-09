@@ -3,3 +3,4 @@ temp/
 .venv
 .gitattributes
 notebook/graph.html
+.html
