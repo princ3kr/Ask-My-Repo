@@ -6,5 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "networkx>=3.3",
-    "pyvis>=0.3.2"
+    "pyvis>=0.3.2",
+    "neo4j"
 ]
