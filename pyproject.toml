@@ -7,5 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "networkx>=3.3",
     "pyvis>=0.3.2",
-    "neo4j"
+    "neo4j",
+    "chromadb",
+    "openai>=1.0.0"
 ]

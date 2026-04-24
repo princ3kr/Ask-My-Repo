@@ -4,5 +4,37 @@ temp/
 .gitattributes
 notebook/graph.html
 
-.html
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Notebooks
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
 notebook/graph.html
+
+# IDEs
+.vscode/
+.idea/
+
+# Local data
+chromadb/
+scratch/
