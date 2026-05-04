@@ -9,5 +9,11 @@ dependencies = [
     "pyvis>=0.3.2",
     "neo4j",
     "chromadb",
-    "openai>=1.0.0"
+    "openai>=1.0.0",
+    "langgraph>=0.1.0",
+    "langchain_community>=0.2.0",
+    "langchain_groq>=0.1.0",
+    "langchain_openai>=0.1.0",
+    "ragas",
+    "pillow"
 ]
