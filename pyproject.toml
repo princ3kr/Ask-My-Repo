@@ -16,5 +16,6 @@ dependencies = [
     "langchain_openai>=0.1.0",
     "ragas",
     "pillow",
-    "sentence-transformers"
+    "sentence-transformers",
+    "fuzzywuzzy"
 ]
