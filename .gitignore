@@ -38,3 +38,4 @@ notebook/graph.html
 # Local data
 chromadb/
 scratch/
+fastembed_cache
