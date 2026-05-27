@@ -19,5 +19,7 @@ dependencies = [
     "fuzzywuzzy",
     "einops",
     "sentence-transformers==3.2.1",
-    "transformers==4.41.0"
+    "transformers==4.41.0",
+    "datasets",
+    "python-dotenv"
 ]

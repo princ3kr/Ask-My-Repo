@@ -40,3 +40,5 @@ chromadb/
 scratch/
 fastembed_cache
 models/
+
+uv.lock
