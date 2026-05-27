@@ -39,3 +39,4 @@ notebook/graph.html
 chromadb/
 scratch/
 fastembed_cache
+models/
