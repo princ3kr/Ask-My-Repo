@@ -42,3 +42,4 @@ fastembed_cache
 models/
 
 uv.lock
+data/
