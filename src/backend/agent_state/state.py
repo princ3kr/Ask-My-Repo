@@ -9,7 +9,7 @@ class GraphResult(TypedDict):
 
 class AgentState(TypedDict):
     repo_id: str
-    TypedDicturrent_agent: Literal["router", "graph", "veTypedDicttor", "synthesizer"]
+    current_agent: Literal["router", "graph", "vector", "synthesizer"]
     router_decision: Literal["graph", "vector", "hybrid"]
     reason: str
     plan: list[Literal["graph", "vector"]]

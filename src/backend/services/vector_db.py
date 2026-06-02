@@ -8,7 +8,8 @@ from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
-os.environ['HF_HOME'] = '/p/repo-2-graph/models'
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ['HF_HOME'] = os.path.join(base_dir, 'models')
 
 class VectorStore:
     def __init__(self, files: dict, collection_name: str):
@@ -46,7 +47,7 @@ class VectorStore:
     def embed_model(self):
         if self._embed_model is None:
             print("Loading SentenceTransformer model...")
-            self._embed_model = SentenceTransformer("jinaai/jina-embeddings-v2-base-code")
+            self._embed_model = SentenceTransformer("jinaai/jina-embeddings-v2-base-code", trust_remote_code=True)
         return self._embed_model
 
     def build(self, max_module_lines=100, overlap=5):
@@ -192,8 +193,8 @@ class VectorStore:
         if not documents:
             return []
         
-        query_embedding = self.embed_model.encode(query, convert_to_numpy=True)
-        doc_embeddings = self.embed_model.encode(documents, convert_to_numpy=True)
+        query_embedding = self.embed_model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
+        doc_embeddings = self.embed_model.encode(documents, convert_to_numpy=True, normalize_embeddings=True)
         
         scores = np.dot(doc_embeddings, query_embedding)
         
