@@ -1,0 +1,82 @@
+[
+  {
+    "question": "Which files in the repository do not import any other local module?",
+    "ground_truth": "The files src/models/concept.py, src/models/state.py, src/models/diagnoses.py, and src/models/intent.py are leaf nodes in the dependency graph and do not import any local modules from the codebase."
+  },
+  {
+    "question": "Which service has the most dependencies on other files?",
+    "ground_truth": "src/services/tutor_service.py has the most dependencies as it imports Neo4jConn, StudentDB, DiagnoserService, IntentService, PlannerService, and tutor_lesson_utils."
+  },
+  {
+    "question": "What happens if planned_paths is empty in the planner node?",
+    "ground_truth": "If planned_paths is empty, the planner node returns Command with goto=END and a final_response message explaining either that a topic was not recognized (if target_topics is empty) or that no learning path was found."
+  },
+  {
+    "question": "What does update_last_json_path do in StudentDB and when is it called?",
+    "ground_truth": "update_last_json_path updates the last_json_path field and last_updated timestamp in TinyDB for the student. It is called in app.py after successfully building the knowledge graph from a PDF, and also with None if the user requests processing a new PDF."
+  },
+  {
+    "question": "What is the initial value of phase in GraphState when a new session starts?",
+    "ground_truth": "The initial value of phase is 'quiz' as set in the initial_state construction in app.py."
+  },
+  {
+    "question": "What does app.py do if no concepts are extracted from the uploaded PDF?",
+    "ground_truth": "app.py updates the Streamlit status to the error state, displays an error message stating that no relevant concepts were identified and to try a more detailed document, then halts execution using st.stop()."
+  },
+  {
+    "question": "Which files does app.py indirectly depend on through tutor_service.py?",
+    "ground_truth": "Through tutor_service.py, app.py indirectly depends on neo4j_conn.py, student_db.py, diagnoser_service.py, intent_service.py, planner_service.py, and tutor_lesson_utils.py."
+  },
+  {
+    "question": "What is the process_limit in app.py and what does it control?",
+    "ground_truth": "process_limit is set to 50 in app.py and controls the maximum number of PDF chunks processed for concept extraction to avoid excessive API calls."
+  },
+  {
+    "question": "Why does TutorWorkflow initialize two separate LLM instances?",
+    "ground_truth": "TutorWorkflow uses self.llm with max_tokens=250 for quick responses like quiz questions/explanations and self.teach_llm with max_tokens=1000 and temperature=0.35 for longer concept explanations requiring more detail."
+  },
+  {
+    "question": "What checkpointing mechanism does TutorWorkflow use and why?",
+    "ground_truth": "TutorWorkflow uses MemorySaver from langgraph.checkpoint.memory as the checkpointer when compiling the workflow, which enables conversation state persistence across multiple turns using thread_id."
+  },
+  {
+    "question": "How is thread_id constructed in app.py and what is it used for?",
+    "ground_truth": "thread_id is constructed as f'thread_{student_id}' in app.py and is used as the LangGraph config key to isolate each student's conversation state in MemorySaver."
+  },
+  {
+    "question": "What condition determines whether the tutor resumes an existing session or starts fresh?",
+    "ground_truth": "If state.values and state.next both exist, the tutor resumes via Command(resume=user_input). If either is falsy, it starts fresh by invoking with a new GraphState."
+  },
+  {
+    "question": "How does app.py handle the temporary PDF file after processing?",
+    "ground_truth": "After processing, app.py checks if the temp file exists using os.path.exists and removes it using os.remove to clean up disk space."
+  },
+  {
+    "question": "How does app.py handle the case where user types the placeholder text 'I want to learn about...' literally?",
+    "ground_truth": "app.py checks if user_input.strip().lower() equals 'i want to learn about...' or 'i want to learn about' and replaces user_input with an empty string to avoid sending the placeholder as actual input."
+  },
+  {
+    "question": "What database does StudentDB use internally and what file does it store data in?",
+    "ground_truth": "StudentDB uses TinyDB internally and stores data in a JSON file at the path db_folder/student_sessions.json, where db_folder defaults to 'sessions'."
+  },
+  {
+    "question": "What parameters determine the weights in the PlannerService cost function, and what are their default values?",
+    "ground_truth": "The weights are controlled by lam1, lam2, lam3, and lam4 with default values of lam1=0.4 (mastery cost), lam2=0.3 (difficulty cost), lam3=0.2 (in-degree cost), and lam4=0.1 (out-degree benefit)."
+  },
+  {
+    "question": "How does GraphService build prerequisite relationships, and what similarity score threshold is required for a valid match?",
+    "ground_truth": "It extracts candidate prerequisites and matches them against existing topics using process.extractOne with fuzz.token_sort_ratio. A prerequisite relationship is created only if the similarity score is 60 or higher and is not matching the concept topic itself."
+  },
+  {
+    "question": "In IntentService, what is the fallback behavior if candidate reranking using the Cross-Encoder returns no matches (returns None)?",
+    "ground_truth": "If the Cross-Encoder fails to find a match above the threshold, the service falls back to the top candidate retrieved by the bi-encoder embedding model (candidates[0])."
+  },
+  {
+    "question": "What models are initialized in IntentService for candidate retrieval and reranking?",
+    "ground_truth": "IntentService initializes a bi-encoder using SentenceTransformer('all-MiniLM-L6-v2') for candidate retrieval and a cross-encoder using CrossEncoder('cross-encoder/stsb-roberta-base') for candidate reranking."
+  },
+  {
+    "question": "How does tutor_lesson_utils.py parse equation fields stored in Neo4j?",
+    "ground_truth": "It tries to parse the string using json.loads(s). If a JSONDecodeError occurs, it falls back to parsing with ast.literal_eval(s) to convert the string representation of list-of-dicts back into list structure."
+  }
+]

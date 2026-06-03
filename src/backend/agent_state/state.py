@@ -12,6 +12,7 @@ class AgentState(TypedDict):
     current_agent: Literal["router", "graph", "vector", "synthesizer"]
     router_decision: Literal["graph", "vector", "hybrid"]
     reason: str
+    context: str
     plan: list[Literal["graph", "vector"]]
     user_query: str
     user_history: list[HumanMessage | AIMessage]

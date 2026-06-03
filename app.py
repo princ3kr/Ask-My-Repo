@@ -10,7 +10,7 @@ def run_chat_cli(repo_url: str):
     files = get_files(repo_url)
     
     print("[*] Initializing ChatEngine workflow...")
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000)
     engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
     
     print("\n" + "="*50)

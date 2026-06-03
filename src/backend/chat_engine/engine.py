@@ -136,6 +136,9 @@ class ChatWorkflow:
             sections.append("\n".join(chunk_text))
             
         context_str = "\n\n".join(sections).strip()
+        if len(context_str) > 15000:
+            context_str = context_str[:15000]
+            context_str = "[TRUNCATED CONTEXT]\n" + context_str
         
         # Call LLM with ResponseModel output structure
         synthesizer_llm = self.llm.with_structured_output(ResponseModel)
@@ -143,7 +146,9 @@ class ChatWorkflow:
             ("system", """You are a code repository assistant.
                 Answer only from the provided context. Do not invent facts.
                 Sources should be file names used to answer.
-                Confidence score should be between 0.0 and 1.0."""),
+                Confidence score should be between 0.0 and 1.0.
+                Keep your response concise and avoid overly long explanations.
+                If the context cannot answer the question, say you do not know."""),
             ("user", "Context:\n{context}\n\nQuestion: {query}")
         ])
         
@@ -151,6 +156,7 @@ class ChatWorkflow:
         output: ResponseModel = chain.invoke({"context": context_str, "query": state["user_query"]})
         
         return {
+            "context": context_str,
             "final_answer": output.answer,
             "current_agent": "synthesizer"
         }
