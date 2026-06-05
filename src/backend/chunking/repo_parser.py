@@ -47,12 +47,13 @@ def _expr_name(node):
 def _collect_calls(node, caller):
     calls = []
     nested_def_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-
-    for child in ast.walk(node):
-        # Skip the function node itself
-        if child is node:
-            continue
-        # Don't descend into nested function/class definitions
+    from collections import deque
+    
+    # Custom BFS traversal that does not queue/descend into nested functions/classes
+    todo = deque(node.body if hasattr(node, "body") else [])
+    
+    while todo:
+        child = todo.popleft()
         if isinstance(child, nested_def_types):
             continue
         if isinstance(child, ast.Call):
@@ -63,12 +64,21 @@ def _collect_calls(node, caller):
                     "callee": callee,
                     "line": getattr(child, "lineno", None)
                 })
+        todo.extend(ast.iter_child_nodes(child))
     return calls
 
 def parse_file(source_code, filepath=None):
     tree = ast.parse(source_code)
     import_modules, import_names, classes, functions = [], [], [], []
     imports, methods, calls, inheritance = [], [], [], []
+
+    # Speed Optimization: Pre-collect class methods to avoid walking the whole tree for every function definition
+    method_nodes = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    method_nodes.add(child)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -99,8 +109,8 @@ def parse_file(source_code, filepath=None):
                     calls.extend(_collect_calls(child, method_qname))
 
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            parent_class = next((cls.name for cls in ast.walk(tree) if isinstance(cls, ast.ClassDef) and node in cls.body), None)
-            if parent_class:
+            # Check if this function is a class method
+            if node in method_nodes:
                 continue
             func_qname = node.name if filepath is None else f"{filepath}::{node.name}"
             function = {"name": node.name, "qualified_name": func_qname, "class_name": None, "line_start": node.lineno, "line_end": node.end_lineno}

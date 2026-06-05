@@ -11,6 +11,7 @@ def map_repository(repo_url: str):
     # 1. Neo4j Graph DB Ingestion
     print("[*] Processing AST structure and pushing to Neo4j...")
     builder = ChunkBuilder(files=files, repo_id=repo_id)
+    builder.build()          # populate dependency graph (must run before push_to_neo4j)
     builder.push_to_neo4j()
     
     # 2. Qdrant Vector DB Ingestion

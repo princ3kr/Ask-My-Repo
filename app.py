@@ -1,5 +1,11 @@
 import os
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from langchain_openai import ChatOpenAI
 from src.backend.chat_engine.engine import ChatWorkflow
 from src.backend.chunking.repo_parser import get_files, get_filename
@@ -10,7 +16,7 @@ def run_chat_cli(repo_url: str):
     files = get_files(repo_url)
     
     print("[*] Initializing ChatEngine workflow...")
-    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
     engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
     
     print("\n" + "="*50)

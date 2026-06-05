@@ -35,13 +35,12 @@ class VectorStore:
                 vectors_config=self.client.get_fastembed_vector_params(),
                 sparse_vectors_config=self.client.get_fastembed_sparse_vector_params()
             )
-            
-        # Create a payload index on the "path" field so we can filter by it
-        self.client.create_payload_index(
-            collection_name=self.collection_name,
-            field_name="path",
-            field_schema="keyword"
-        )
+            # Create a payload index on the "path" field so we can filter by it
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="path",
+                field_schema="keyword"
+            )
 
     @property
     def embed_model(self):
@@ -168,7 +167,8 @@ class VectorStore:
         return {
             "documents": [[hit.document for hit in results]],
             "metadatas": [[hit.metadata for hit in results]],
-            "ids": [[str(hit.id) for hit in results]]
+            "ids": [[str(hit.id) for hit in results]],
+            "scores": [[hit.score for hit in results]]
         }
 
     def vector_search(self, query: str, filenames: list, top_k: int = 5):
@@ -187,19 +187,30 @@ class VectorStore:
         )
     
     def rerank(self, context: dict, query: str, top_k: int):
-        documents = context['documents'][0]
-        metadatas = context['metadatas'][0]
+        documents = context.get('documents', [[]])[0]
+        metadatas = context.get('metadatas', [[]])[0]
+        scores = context.get('scores', [[]])[0]
         
         if not documents:
             return []
+            
+        if scores and len(scores) == len(documents):
+            # Qdrant already computed the scores, just use them!
+            ranked = sorted(
+                [(metadatas[i], scores[i], documents[i]) for i in range(len(documents))],
+                key=lambda x: x[1],
+                reverse=True
+            )[:top_k]
+            return ranked
         
+        # Fallback to local SentenceTransformer if scores are not pre-computed
         query_embedding = self.embed_model.encode(query, convert_to_numpy=True, normalize_embeddings=True)
         doc_embeddings = self.embed_model.encode(documents, convert_to_numpy=True, normalize_embeddings=True)
         
-        scores = np.dot(doc_embeddings, query_embedding)
+        computed_scores = np.dot(doc_embeddings, query_embedding)
         
         ranked = sorted(
-            [(metadatas[i], scores[i], documents[i]) for i in range(len(documents))],
+            [(metadatas[i], computed_scores[i], documents[i]) for i in range(len(documents))],
             key=lambda x: x[1],
             reverse=True
         )[:top_k]
