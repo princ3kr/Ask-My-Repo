@@ -21,5 +21,7 @@ dependencies = [
     "sentence-transformers==3.2.1",
     "transformers==4.41.0",
     "datasets",
-    "python-dotenv"
+    "python-dotenv",
+    "fastapi",
+    "uvicorn"
 ]
