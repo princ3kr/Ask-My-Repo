@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import uuid
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 from langchain_openai import ChatOpenAI
