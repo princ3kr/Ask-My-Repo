@@ -7,10 +7,10 @@ export default {
   theme: {
     extend: {
         colors: {
-            background: '#080C10',
+            background: '#050508',
             accent: '#00D4FF',
-            surface: '#11151A',
-            'surface-muted': '#1A1E24',
+            surface: '#0A0A10',
+            'surface-muted': '#14141C',
         },
         fontFamily: {
             mono: ['"Geist Mono"', 'monospace'],

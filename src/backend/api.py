@@ -5,18 +5,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
-import os
+import threading
 
 load_dotenv()
 
 # pyrefly: ignore [missing-import]
 from src.backend.chat_engine.engine import ChatWorkflow
 # pyrefly: ignore [missing-import]
-from src.backend.chunking.repo_parser import get_files, get_filename
+from src.backend.chunking.repo_parser import get_files, get_filename, normalize_repo_url
+# pyrefly: ignore [missing-import]
+from src.backend.map.mapper import map_repository
+# pyrefly: ignore [missing-import]
+from src.backend.job_status import create_job, update_job, get_job, job_to_dict
 # pyrefly: ignore [missing-import]
 from langchain_openai import ChatOpenAI
 
-app = FastAPI(title="R2G Mapper API")
+app = FastAPI(title="Ask My repo API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,59 +30,109 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global engine cache
 active_engines: Dict[str, ChatWorkflow] = {}
+
+
+def friendly_error(message: str) -> str:
+    lower = message.lower()
+    if "allocate memory" in lower or "onnxruntime" in lower:
+        return "This repository is very large and ran out of memory while indexing. Try a smaller repo."
+    if "git" in lower and ("clone" in lower or "failed" in lower or "not found" in lower):
+        return "We couldn't download that repository. Please double-check the URL."
+    if "neo4j" in lower:
+        return "Couldn't save the code map. Check that your database connection is set up."
+    if "qdrant" in lower:
+        return "Couldn't save the search index. Check that your search storage is set up."
+    if "openai" in lower or "api key" in lower:
+        return "The AI assistant isn't configured yet. Check your API key."
+    return "Something went wrong while setting up your repository. Please try again."
+
 
 class ParseRequest(BaseModel):
     repo_url: str
+
 
 class ChatRequest(BaseModel):
     repo_url: str
     query: str
     history: Optional[List[Dict[str, str]]] = []
 
-@app.post("/api/parse")
-def parse_repo(request: ParseRequest):
+
+def _run_parse_job(job_id: str, repo_url: str) -> None:
     try:
-        repo_url = request.repo_url
-        repo_id = get_filename(repo_url)
-        files = get_files(repo_url)
-        
+        def on_progress(stage: str, progress: int, message: str) -> None:
+            update_job(job_id, stage=stage, progress=progress, message=message)
+
+        mapped = map_repository(repo_url, on_progress=on_progress)
+        repo_id = mapped["repo_id"]
+        files = mapped["files"]
+
         llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
         engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
-        
-        # Store engine in cache
         active_engines[repo_id] = engine
-        
-        return {
-            "status": "success",
-            "repo_id": repo_id,
-            "message": "Repository parsed successfully",
-            "files_count": len(files)
-        }
+
+        update_job(
+            job_id,
+            stage="done",
+            progress=100,
+            message="All set! You can start asking questions.",
+            status="done",
+            result={
+                "repo_id": repo_id,
+                "files_count": len(files),
+                "nodes_count": mapped["nodes_count"],
+                "edges_count": mapped["edges_count"],
+            },
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = friendly_error(str(e))
+        update_job(job_id, stage="error", status="error", message=msg, error=msg)
+
+
+@app.post("/api/parse")
+def parse_repo(request: ParseRequest):
+    repo_url = normalize_repo_url(request.repo_url)
+    if not repo_url:
+        raise HTTPException(status_code=400, detail="Repository URL is required.")
+
+    job_id = create_job()
+    thread = threading.Thread(target=_run_parse_job, args=(job_id, repo_url), daemon=True)
+    thread.start()
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/api/parse/status/{job_id}")
+def parse_status(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return job_to_dict(job)
+
 
 @app.post("/api/chat")
 def chat(request: ChatRequest):
-    repo_id = get_filename(request.repo_url)
+    repo_url = normalize_repo_url(request.repo_url)
+    repo_id = get_filename(repo_url)
+    if not repo_id:
+        raise HTTPException(status_code=400, detail="Invalid repository URL.")
+
     if repo_id not in active_engines:
-        # Re-initialize if not in memory (for simplicity, we assume files are cached)
         try:
-            files = get_files(request.repo_url)
+            files = get_files(repo_url)
             llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
             engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
             active_engines[repo_id] = engine
-        except Exception as e:
-            raise HTTPException(status_code=400, detail="Repo not parsed. Please parse first.")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Repo not indexed. Please connect and index first.")
 
     engine = active_engines[repo_id]
-    
+
     initial_state = {
         "repo_id": repo_id,
         "current_agent": "router",
         "router_decision": "hybrid",
         "reason": "",
+        "context": "",
         "plan": [],
         "user_query": request.query,
         "user_history": request.history or [],
@@ -87,7 +141,7 @@ def chat(request: ChatRequest):
         "vector_result": [],
         "final_answer": ""
     }
-    
+
     try:
         result = engine.app.invoke(initial_state)
         return {
@@ -97,9 +151,9 @@ def chat(request: ChatRequest):
             "answer": result.get("final_answer", "")
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=friendly_error(str(e)))
 
 if __name__ == "__main__":
     # pyrefly: ignore [missing-import]
-    import uvicorn  
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

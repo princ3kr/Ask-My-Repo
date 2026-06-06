@@ -1,14 +1,74 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { GitBranch, Send, Network, Database, FileCode, Cpu, Link as LinkIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+    GitBranch, Send, Bot, User, Loader2,
+    ChevronDown, ChevronUp, Check, Circle,
+    Network, Search, MessageSquare, RotateCcw,
+} from 'lucide-react';
+import InteractiveBackground from './components/InteractiveBackground';
+import BrandLogo, { PRODUCT_NAME } from './components/BrandLogo';
 
-const API_URL = 'http://localhost:8000/api';
+const API_URL = '/api';
 
-const AnimatedCounter = ({ value, duration = 2000 }) => {
+const INDEX_STAGES = [
+    { id: 'fetching', label: 'Download' },
+    { id: 'graph_building', label: 'Understand' },
+    { id: 'graph_saving', label: 'Connect' },
+    { id: 'vector_building', label: 'Organize' },
+    { id: 'vector_saving', label: 'Searchable' },
+    { id: 'assistant_ready', label: 'Prepare' },
+    { id: 'done', label: 'Ready' },
+];
+
+const STAGE_ORDER = INDEX_STAGES.map((s) => s.id);
+
+const FEATURES = [
+    { icon: Network, title: 'Code map', desc: 'Understand how files relate' },
+    { icon: Search, title: 'Deep search', desc: 'Find logic anywhere in the repo' },
+    { icon: MessageSquare, title: 'Natural Q&A', desc: 'Ask questions in plain English' },
+];
+
+const SUGGESTED_QUESTIONS = [
+    'What are the main entry points?',
+    'How do modules depend on each other?',
+    'Where is the core business logic?',
+    'What patterns does this codebase use?',
+];
+
+const normalizeRepoUrl = (url) => {
+    const trimmed = url.trim();
+    if (!trimmed) return '';
+    if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('git@')) return trimmed.replace(/\/$/, '');
+    return `https://${trimmed.replace(/\/$/, '')}`;
+};
+
+const repoShortName = (url) => {
+    if (!url) return '';
+    try {
+        const parts = new URL(url).pathname.split('/').filter(Boolean);
+        return parts.length >= 2 ? parts.slice(-2).join('/') : parts[parts.length - 1] || url;
+    } catch {
+        return url.split('/').slice(-2).join('/') || url;
+    }
+};
+
+function useCardGlow() {
+    const onMove = (e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        e.currentTarget.style.setProperty('--card-x', `${e.clientX - rect.left}px`);
+        e.currentTarget.style.setProperty('--card-y', `${e.clientY - rect.top}px`);
+    };
+    return { onMouseMove: onMove, onMouseLeave: (e) => {
+        e.currentTarget.style.setProperty('--card-x', '50%');
+        e.currentTarget.style.setProperty('--card-y', '50%');
+    }};
+}
+
+const AnimatedCounter = ({ value, duration = 1500 }) => {
     const [count, setCount] = useState(0);
 
     useEffect(() => {
         let startTime;
-        const endValue = parseInt(value.toString().replace(/,/g, ''));
+        const endValue = parseInt(value.toString().replace(/,/g, ''), 10);
         if (isNaN(endValue)) {
             setCount(value);
             return;
@@ -18,14 +78,9 @@ const AnimatedCounter = ({ value, duration = 2000 }) => {
             if (!startTime) startTime = time;
             const progress = Math.min((time - startTime) / duration, 1);
             const ease = 1 - Math.pow(1 - progress, 4);
-
             setCount(Math.floor(ease * endValue));
-
-            if (progress < 1) {
-                requestAnimationFrame(animate);
-            } else {
-                setCount(endValue);
-            }
+            if (progress < 1) requestAnimationFrame(animate);
+            else setCount(endValue);
         };
 
         requestAnimationFrame(animate);
@@ -34,267 +89,496 @@ const AnimatedCounter = ({ value, duration = 2000 }) => {
     return <span>{typeof count === 'number' ? count.toLocaleString() : count}</span>;
 };
 
+const StatusBadge = ({ isParsing, isParsed }) => {
+    if (isParsing) {
+        return (
+            <span className="status-badge">
+                <span className="status-dot status-dot-busy" />
+                Setting up
+            </span>
+        );
+    }
+    if (isParsed) {
+        return (
+            <span className="status-badge">
+                <span className="status-dot status-dot-live" />
+                Ready
+            </span>
+        );
+    }
+    return (
+        <span className="status-badge">
+            <span className="status-dot" />
+            Waiting
+        </span>
+    );
+};
+
+const StageStep = ({ stage, currentStage, isError }) => {
+    const currentIdx = STAGE_ORDER.indexOf(currentStage);
+    const stepIdx = STAGE_ORDER.indexOf(stage.id);
+    const isDone = !isError && (currentStage === 'done' || (currentIdx > stepIdx && currentIdx !== -1));
+    const isActive = !isError && stage.id === currentStage;
+
+    return (
+        <div className={`stage-step ${isActive ? 'stage-step-active' : ''} ${isDone ? 'stage-step-done' : ''}`}>
+            <div className="stage-step-icon">
+                {isDone ? <Check size={10} strokeWidth={3} /> : isActive ? <Loader2 size={10} className="animate-spin" /> : <Circle size={8} />}
+            </div>
+            <span className="stage-step-label">{stage.label}</span>
+        </div>
+    );
+};
+
+const ProgressPanel = ({ progress, message, stage, isError }) => (
+    <div className={`progress-panel fade-in-up ${isError ? 'progress-panel-error' : ''}`}>
+        <div className="mb-4 flex items-start justify-between gap-3">
+            <div>
+                <p className="text-xs font-medium uppercase tracking-wider text-accent/70">
+                    {isError ? 'Something went wrong' : 'Setting up your repository'}
+                </p>
+                <p className="mt-1 text-sm leading-relaxed text-white/80 sm:text-base">{message}</p>
+            </div>
+            {!isError && (
+                <span className="shrink-0 rounded-full bg-white/5 px-2.5 py-1 text-xs font-medium text-white/60">
+                    {progress}%
+                </span>
+            )}
+        </div>
+
+        {!isError && (
+            <>
+                <div className="progress-track mb-4">
+                    <div className="progress-fill" style={{ width: `${progress}%` }} />
+                </div>
+                <div className="stage-grid">
+                    {INDEX_STAGES.map((s) => (
+                        <StageStep key={s.id} stage={s} currentStage={stage} isError={isError} />
+                    ))}
+                </div>
+            </>
+        )}
+    </div>
+);
+
 const App = () => {
     const [repoUrl, setRepoUrl] = useState('');
     const [isParsing, setIsParsing] = useState(false);
     const [isParsed, setIsParsed] = useState(false);
-    const [filesCount, setFilesCount] = useState(0);
+    const [stats, setStats] = useState({ files: 0, nodes: 0, edges: 0 });
+    const [jobProgress, setJobProgress] = useState({ progress: 0, message: '', stage: 'starting' });
     const [messages, setMessages] = useState([
         {
             id: 1,
             role: 'assistant',
-            content: 'I am R2G Mapper. Connect a repository graph to begin.'
-        }
+            content: `Welcome to ${PRODUCT_NAME} — connect any GitHub repo and ask questions about how it works, what depends on what, and where things live.`,
+        },
     ]);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
+    const [expandedReason, setExpandedReason] = useState({});
+    const [showSuggestions, setShowSuggestions] = useState(false);
     const messagesEndRef = useRef(null);
+    const pollRef = useRef(null);
+    const cardGlow = useCardGlow();
 
     const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages, isTyping]);
+    }, [messages, isTyping, jobProgress]);
+
+    useEffect(() => () => {
+        if (pollRef.current) clearInterval(pollRef.current);
+    }, []);
+
+    const appendMessage = (msg) => setMessages((prev) => [...prev, msg]);
+
+    const pollJobStatus = useCallback((jobId) => new Promise((resolve, reject) => {
+        const poll = async () => {
+            try {
+                const res = await fetch(`${API_URL}/parse/status/${jobId}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Lost connection to the server');
+
+                setJobProgress({
+                    progress: data.progress ?? 0,
+                    message: data.message ?? 'Working on it…',
+                    stage: data.stage ?? 'starting',
+                });
+
+                if (data.status === 'done') {
+                    clearInterval(pollRef.current);
+                    pollRef.current = null;
+                    resolve(data.result);
+                } else if (data.status === 'error') {
+                    clearInterval(pollRef.current);
+                    pollRef.current = null;
+                    reject(new Error(data.error || data.message));
+                }
+            } catch (e) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+                reject(e);
+            }
+        };
+
+        poll();
+        pollRef.current = setInterval(poll, 700);
+    }), []);
 
     const handleParse = async () => {
-        if (!repoUrl) return;
+        const normalized = normalizeRepoUrl(repoUrl);
+        if (!normalized) return;
+
+        setRepoUrl(normalized);
         setIsParsing(true);
+        setShowSuggestions(false);
+        setJobProgress({ progress: 2, message: 'Starting up…', stage: 'starting' });
+
+        appendMessage({
+            id: Date.now(),
+            role: 'user',
+            content: `Connect ${repoShortName(normalized)}`,
+        });
+
         try {
             const res = await fetch(`${API_URL}/parse`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_url: repoUrl })
+                body: JSON.stringify({ repo_url: normalized }),
             });
             const data = await res.json();
-            if (data.status === 'success') {
-                setIsParsed(true);
-                setFilesCount(data.files_count || 0);
-            } else {
-                alert("Error parsing repository: " + data.detail);
-            }
+            if (!res.ok) throw new Error(data.detail || 'Could not start setup');
+
+            const result = await pollJobStatus(data.job_id);
+
+            setIsParsed(true);
+            setStats({
+                files: result.files_count || 0,
+                nodes: result.nodes_count || 0,
+                edges: result.edges_count || 0,
+            });
+            setShowSuggestions(true);
+
+            appendMessage({
+                id: Date.now() + 2,
+                role: 'assistant',
+                content: `Done! I've learned ${result.files_count} files across ${result.nodes_count} connected parts. Pick a suggestion below or ask anything.`,
+            });
         } catch (e) {
-            alert("Failed to connect to backend: " + e.message);
+            setJobProgress((prev) => ({
+                ...prev,
+                stage: 'error',
+                message: e.message,
+            }));
+            appendMessage({
+                id: Date.now() + 2,
+                role: 'assistant',
+                content: e.message,
+            });
         } finally {
             setIsParsing(false);
         }
     };
 
-    const handleSend = async () => {
-        if (!input.trim() || !isParsed) return;
+    const handleNewSession = () => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setRepoUrl('');
+        setIsParsing(false);
+        setIsParsed(false);
+        setStats({ files: 0, nodes: 0, edges: 0 });
+        setJobProgress({ progress: 0, message: '', stage: 'starting' });
+        setShowSuggestions(false);
+        setMessages([{
+            id: Date.now(),
+            role: 'assistant',
+            content: 'Fresh start — connect a new repository whenever you\'re ready.',
+        }]);
+        setInput('');
+        setExpandedReason({});
+    };
 
-        const newUserMsg = { id: Date.now(), role: 'user', content: input };
-        setMessages(prev => [...prev, newUserMsg]);
+    const buildHistory = (currentMessages) =>
+        currentMessages
+            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isStatus)
+            .slice(-8)
+            .map((m) => ({ role: m.role, content: m.content }));
+
+    const handleSend = async (textOverride) => {
+        const query = (textOverride ?? input).trim();
+        if (!query || !isParsed || isTyping) return;
+
+        const newUserMsg = { id: Date.now(), role: 'user', content: query };
+        setMessages((prev) => [...prev, newUserMsg]);
         setInput('');
         setIsTyping(true);
+        setShowSuggestions(false);
 
         try {
             const res = await fetch(`${API_URL}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ repo_url: repoUrl, query: input, history: [] })
+                body: JSON.stringify({
+                    repo_url: normalizeRepoUrl(repoUrl),
+                    query,
+                    history: buildHistory([...messages, newUserMsg]),
+                }),
             });
             const data = await res.json();
 
-            const newAsstMsgId = Date.now() + 1;
-            setMessages(prev => [...prev, {
-                id: newAsstMsgId,
-                role: 'assistant',
-                content: data.answer || "No response.",
-                reason: data.reason,
-                decision: data.decision
-            }]);
+            if (!res.ok) {
+                throw new Error(data.detail || 'Could not get an answer right now');
+            }
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: Date.now() + 1,
+                    role: 'assistant',
+                    content: data.answer || 'I couldn\'t find a clear answer for that.',
+                    reason: data.reason,
+                    decision: data.decision,
+                },
+            ]);
         } catch (e) {
-            setMessages(prev => [...prev, {
+            appendMessage({
                 id: Date.now() + 1,
                 role: 'assistant',
-                content: "Error communicating with the backend: " + e.message
-            }]);
+                content: e.message,
+            });
         } finally {
             setIsTyping(false);
         }
     };
 
+    const toggleReason = (id) => {
+        setExpandedReason((prev) => ({ ...prev, [id]: !prev[id] }));
+    };
+
+    const showSetup = !isParsed && !isParsing;
+    const showProgress = isParsing || (jobProgress.stage === 'error' && !isParsed);
+
     return (
-        <div className="flex h-screen font-sans antialiased relative z-10 text-slate-200">
-            <div className="grain"></div>
+        <div className="relative h-[100dvh] overflow-hidden text-slate-200">
+            <InteractiveBackground />
+            <div className="grain" />
 
-            {/* LEFT SIDEBAR */}
-            <div className="w-[280px] glass-panel flex flex-col fade-in-up relative z-20">
-                <div className="p-6 border-b border-white/5">
-                    <h2 className="text-[10px] uppercase tracking-[0.25em] text-white/40 mb-5 font-mono font-semibold">Repository Target</h2>
-
-                    <div className="space-y-4">
-                        <div className="relative group">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-white/30 group-focus-within:text-accent transition-colors">
-                                <GitBranch size={16} />
+            <div className="relative z-10 flex h-full flex-col">
+                <header className="flex shrink-0 flex-col gap-3 border-b border-white/5 bg-[#050508]/50 px-4 py-3 backdrop-blur-xl sm:px-6 md:px-8">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 flex-col items-center gap-2 sm:items-start sm:gap-1">
+                            <BrandLogo variant={showSetup ? 'compact' : 'header'} />
+                            <div className="flex w-full min-w-0 items-center justify-between gap-2 sm:justify-start">
+                                <p className="truncate text-center text-[11px] text-white/40 sm:text-left">
+                                    {isParsed ? repoShortName(repoUrl) : 'Chat with any codebase'}
+                                </p>
+                                <span className="shrink-0 rounded-md bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent/90 sm:hidden">
+                                    Beta
+                                </span>
                             </div>
-                            <input
-                                type="text"
-                                placeholder="github.com/org/repo"
-                                className="w-full bg-black/40 border border-white/10 rounded-md py-2.5 pl-10 pr-3 text-sm text-white placeholder-white/20 focus:outline-none focus:border-accent/40 focus:bg-black/60 transition-all font-mono"
-                                value={repoUrl}
-                                onChange={(e) => setRepoUrl(e.target.value)}
-                                disabled={isParsing || isParsed}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleParse();
-                                }}
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-end sm:gap-3">
+                            <span className="hidden rounded-md bg-accent/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent/90 sm:inline">
+                                Beta
+                            </span>
+                            <StatusBadge isParsing={isParsing} isParsed={isParsed} />
+
+                        {isParsed && (
+                            <>
+                                <div className="stats-pill">
+                                    <span><AnimatedCounter value={stats.files} /> files</span>
+                                    <span className="hidden text-white/20 sm:inline">·</span>
+                                    <span className="text-accent/80"><AnimatedCounter value={stats.nodes} /> parts</span>
+                                    <span className="hidden text-white/20 sm:inline">·</span>
+                                    <span><AnimatedCounter value={stats.edges} /> links</span>
+                                </div>
+                                <button
+                                    onClick={handleNewSession}
+                                    className="btn-ghost flex items-center gap-1.5"
+                                    title="Connect a different repo"
+                                >
+                                    <RotateCcw size={12} />
+                                    <span className="hidden sm:inline">New repo</span>
+                                </button>
+                            </>
+                        )}
+
+                        {isParsing && (
+                            <div className="flex items-center gap-2 text-xs text-accent/80 lg:hidden">
+                                <Loader2 size={14} className="animate-spin" />
+                                <span>{jobProgress.progress}%</span>
+                            </div>
+                        )}
+                        </div>
+                    </div>
+                </header>
+
+                <main className="flex-1 overflow-y-auto overscroll-contain px-3 pb-48 pt-3 sm:px-4 md:px-6 md:pb-44 md:pt-4">
+                    <div className="mx-auto max-w-3xl space-y-5 sm:space-y-6">
+                        {showSetup && (
+                            <>
+                                <div className="flex justify-center px-2 pt-2 sm:pt-4">
+                                    <BrandLogo variant="hero" />
+                                </div>
+                                <div
+                                    className="chat-setup-card fade-in-up mx-auto w-full max-w-xl rounded-2xl p-5 sm:p-8"
+                                    {...cardGlow}
+                                >
+                                    <div className="relative z-10">
+                                        <p className="mb-1 text-center text-xs uppercase tracking-[0.2em] text-accent/70 sm:text-left">Get started in seconds</p>
+                                    <h2 className="mb-2 text-xl font-medium text-white sm:text-2xl">
+                                        Turn any repo into a conversation
+                                    </h2>
+                                    <p className="mb-6 text-sm leading-relaxed text-white/50">
+                                        Paste a GitHub link — we&apos;ll learn the codebase and answer your questions instantly.
+                                    </p>
+
+                                    <div className="feature-grid mb-6">
+                                        {FEATURES.map(({ icon: Icon, title, desc }) => (
+                                            <div key={title} className="feature-pill">
+                                                <div className="feature-icon">
+                                                    <Icon size={15} />
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <p className="text-xs font-medium text-white/90">{title}</p>
+                                                    <p className="text-[11px] leading-snug text-white/40">{desc}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div className="flex flex-col gap-3 sm:flex-row">
+                                        <div className="relative min-w-0 flex-1">
+                                            <GitBranch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                                            <input
+                                                type="text"
+                                                placeholder="github.com/owner/repo"
+                                                className="w-full rounded-xl border border-white/10 bg-black/40 py-3 pl-10 pr-4 text-sm text-white placeholder-white/25 outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                                                value={repoUrl}
+                                                onChange={(e) => setRepoUrl(e.target.value)}
+                                                onKeyDown={(e) => e.key === 'Enter' && handleParse()}
+                                            />
+                                        </div>
+                                        <button
+                                            onClick={handleParse}
+                                            disabled={!repoUrl.trim()}
+                                            className="btn-primary w-full shrink-0 px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+                                        >
+                                            Get started
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            </>
+                        )}
+
+                        {showProgress && (
+                            <ProgressPanel
+                                progress={jobProgress.progress}
+                                message={jobProgress.message}
+                                stage={jobProgress.stage}
+                                isError={jobProgress.stage === 'error'}
                             />
-                        </div>
-                        <button
-                            onClick={handleParse}
-                            disabled={!repoUrl || isParsing || isParsed}
-                            className={`w-full py-2.5 px-4 rounded-md text-sm font-medium transition-all flex items-center justify-center space-x-2 ${isParsed
-                                    ? 'bg-white/5 text-accent border border-accent/20 cursor-default'
-                                    : isParsing
-                                        ? 'bg-accent/20 text-accent cursor-wait'
-                                        : 'bg-accent text-background hover:bg-accent/90 hover:shadow-[0_0_15px_rgba(0,212,255,0.4)] disabled:opacity-30 disabled:hover:shadow-none disabled:cursor-not-allowed'
-                                }`}
-                        >
-                            {isParsing ? (
-                                <>
-                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-accent" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Graph building...
-                                </>
-                            ) : isParsed ? (
-                                <span className="flex items-center"><LinkIcon size={14} /><span className="ml-2">Connected</span></span>
-                            ) : (
-                                'Parse Repo'
-                            )}
-                        </button>
-                    </div>
-                </div>
+                        )}
 
-                {/* Metadata Card */}
-                <div className="p-6 flex-1 overflow-y-auto">
-                    {(isParsing || isParsed) && (
-                        <div className={`bg-black/30 rounded-lg p-5 space-y-5 transition-all duration-700 ${isParsing ? 'animate-pulse shimmer-bg border border-accent/10' : 'border border-white/5'}`}>
-                            <div className="flex items-center space-x-3 pb-4 border-b border-white/5">
-                                <div className="h-9 w-9 rounded-full bg-gradient-to-br from-accent/20 to-transparent flex items-center justify-center text-accent shadow-[inset_0_0_10px_rgba(0,212,255,0.2)]">
-                                    <Network size={16} />
-                                </div>
-                                <div className="overflow-hidden">
-                                    <div className="text-[10px] text-white/40 font-mono tracking-wider uppercase mb-0.5">Active Context</div>
-                                    <div className="text-sm font-semibold truncate text-white/90">{repoUrl.split('/').pop() || 'Unknown Repo'}</div>
-                                </div>
-                            </div>
-
-                            <div className="space-y-4">
-                                <div className="flex justify-between items-center text-xs font-mono">
-                                    <div className="flex items-center text-white/40 space-x-2"><FileCode size={14} /><span>Files</span></div>
-                                    <div className="text-white/80">{isParsed ? <AnimatedCounter value={filesCount} /> : '-'}</div>
-                                </div>
-                                <div className="flex justify-between items-center text-xs font-mono">
-                                    <div className="flex items-center text-white/40 space-x-2"><Database size={14} /><span>Nodes</span></div>
-                                    <div className="text-accent font-medium">{isParsed ? <AnimatedCounter value={filesCount * 12} /> : '-'}</div>
-                                </div>
-                                <div className="flex justify-between items-center text-xs font-mono">
-                                    <div className="flex items-center text-white/40 space-x-2"><Network size={14} /><span>Edges</span></div>
-                                    <div className="text-accent/70 font-medium">{isParsed ? <AnimatedCounter value={filesCount * 45} /> : '-'}</div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Decorative Mini-graph */}
-                <div className="p-6 mt-auto opacity-30 flex justify-center pb-8">
-                    <svg width="120" height="80" viewBox="0 0 120 80" className="animate-pulse-slow">
-                        <line x1="30" y1="40" x2="60" y2="20" stroke="rgba(0,212,255,0.4)" strokeWidth="1" />
-                        <line x1="60" y1="20" x2="90" y2="40" stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
-                        <line x1="60" y1="20" x2="60" y2="60" stroke="rgba(0,212,255,0.2)" strokeWidth="1" />
-                        <line x1="30" y1="40" x2="60" y2="60" stroke="rgba(255,255,255,0.2)" strokeWidth="1" />
-                        <line x1="90" y1="40" x2="60" y2="60" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
-
-                        <circle cx="30" cy="40" r="3" fill="#00D4FF" />
-                        <circle cx="60" cy="20" r="4" fill="#00D4FF" className="animate-breathe" style={{ transformOrigin: '60px 20px' }} />
-                        <circle cx="90" cy="40" r="3" fill="rgba(255,255,255,0.5)" />
-                        <circle cx="60" cy="60" r="3" fill="rgba(255,255,255,0.3)" />
-                    </svg>
-                </div>
-            </div>
-
-            {/* MAIN AREA */}
-            <div className="flex-1 flex flex-col relative overflow-hidden bg-background">
-                <div className="particle-bg"></div>
-
-                {/* Top Bar */}
-                <div className="h-16 border-b border-white/5 bg-background/60 backdrop-blur-xl flex items-center justify-between px-8 z-20 fade-in-up delay-100">
-                    <div className="flex items-center space-x-5">
-                        <div className="font-mono font-bold text-[15px] tracking-widest text-white flex items-center">
-                            <span className="text-accent mr-3 opacity-80">✦</span> R2G_MAPPER
-                        </div>
-                        <div className="h-5 w-px bg-white/10"></div>
-                        <div className="text-xs font-mono text-white/60 bg-white/[0.03] border border-white/5 px-3 py-1.5 rounded-full shadow-inner">
-                            {isParsed ? (repoUrl.split('/').pop() || 'connected') : 'awaiting_connection'}
-                        </div>
-                    </div>
-
-                    <div className="flex items-center space-x-3 font-mono text-[11px] uppercase tracking-wider text-white/40 bg-black/20 px-3 py-1.5 rounded-full border border-white/5">
-                        <div className={`w-2 h-2 rounded-full ${isParsed ? 'bg-accent animate-breathe' : 'bg-white/20'}`}></div>
-                        <span>{isParsed ? 'Session Active' : 'Idle'}</span>
-                    </div>
-                </div>
-
-                {/* Chat Messages Area */}
-                <div className="flex-1 overflow-y-auto px-8 md:px-16 pt-10 pb-40 space-y-10 z-10 scroll-smooth fade-in-up delay-200">
-                    <div className="max-w-4xl mx-auto space-y-10">
                         {messages.map((msg) => (
-                            <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] ${msg.role === 'user'
-                                        ? 'user-msg px-6 py-4 rounded-2xl rounded-tr-sm shadow-xl'
-                                        : 'glass-assistant-msg px-7 py-6 rounded-2xl rounded-tl-sm w-full'
+                            <div
+                                key={msg.id}
+                                className={`flex gap-2.5 fade-in-up sm:gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+                            >
+                                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1 sm:h-8 sm:w-8 ${
+                                    msg.role === 'user'
+                                        ? 'bg-white text-background ring-white/20'
+                                        : 'bg-white/5 text-accent ring-white/10'
+                                }`}>
+                                    {msg.role === 'user' ? <User size={13} /> : <Bot size={13} />}
+                                </div>
+
+                                <div className={`min-w-0 max-w-[88%] sm:max-w-[85%] ${msg.role === 'user' ? 'text-right' : ''}`}>
+                                    <div className={`inline-block rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed sm:px-4 sm:py-3 sm:text-[15px] ${
+                                        msg.role === 'user'
+                                            ? 'chat-bubble-user rounded-tr-md'
+                                            : 'chat-bubble-assistant rounded-tl-md'
                                     }`}>
-                                    <div className={`text-[15px] leading-relaxed whitespace-pre-wrap ${msg.role === 'user' ? 'font-medium tracking-tight' : 'text-white/80 font-light tracking-wide'}`}>
-                                        {msg.content}
+                                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                                     </div>
 
                                     {msg.reason && (
-                                        <div className="mt-4 rounded-lg overflow-hidden code-block text-[13px] font-mono relative shadow-2xl">
-                                            <div className="bg-white/5 px-4 py-2 text-xs text-white/40 border-b border-white/5 flex items-center justify-between">
-                                                <span className="flex items-center"><Cpu size={14} className="mr-2" /> Agent Logic</span>
-                                                <span className="uppercase text-[10px] tracking-wider text-accent">{msg.decision}</span>
-                                            </div>
-                                            <div className="p-4 text-white/60">
-                                                {msg.reason}
-                                            </div>
+                                        <div className="mt-2 text-left">
+                                            <button
+                                                onClick={() => toggleReason(msg.id)}
+                                                className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-white/35 transition hover:text-accent/70"
+                                            >
+                                                {expandedReason[msg.id] ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                                Why this answer
+                                            </button>
+                                            {expandedReason[msg.id] && (
+                                                <div className="mt-2 rounded-xl border border-white/5 bg-black/40 p-3 text-xs leading-relaxed text-white/50">
+                                                    {msg.reason}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>
                             </div>
                         ))}
 
+                        {showSuggestions && isParsed && !isTyping && (
+                            <div className="fade-in-up space-y-2.5 pt-1">
+                                <p className="text-[11px] uppercase tracking-wider text-white/30">Try asking</p>
+                                <div className="flex flex-wrap gap-2">
+                                    {SUGGESTED_QUESTIONS.map((q) => (
+                                        <button
+                                            key={q}
+                                            type="button"
+                                            onClick={() => handleSend(q)}
+                                            className="suggestion-chip"
+                                        >
+                                            {q}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         {isTyping && (
-                            <div className="flex justify-start">
-                                <div className="glass-assistant-msg px-6 py-5 rounded-2xl rounded-tl-sm flex items-center space-x-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-white/40 animate-bounce-elastic"></div>
-                                    <div className="w-1.5 h-1.5 rounded-full bg-white/40 animate-bounce-elastic" style={{ animationDelay: '0.15s' }}></div>
-                                    <div className="w-1.5 h-1.5 rounded-full bg-white/40 animate-bounce-elastic" style={{ animationDelay: '0.3s' }}></div>
+                            <div className="flex gap-2.5 fade-in-up sm:gap-3">
+                                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/5 text-accent ring-1 ring-white/10 sm:h-8 sm:w-8">
+                                    <Bot size={13} />
+                                </div>
+                                <div className="chat-bubble-assistant inline-flex items-center gap-2 rounded-2xl rounded-tl-md px-3.5 py-2.5 sm:px-4 sm:py-3">
+                                    <Loader2 size={16} className="animate-spin text-accent/70" />
+                                    <span className="text-sm text-white/50">Looking through your codebase…</span>
                                 </div>
                             </div>
                         )}
                         <div ref={messagesEndRef} />
                     </div>
-                </div>
+                </main>
 
-                {/* Input Area */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-background via-background/95 to-transparent pt-32 pb-10 px-8 z-20 fade-in-up delay-300 pointer-events-none">
-                    <div className="max-w-3xl mx-auto relative pointer-events-auto">
-                        <div className="glass-panel bg-black/40 rounded-2xl p-2.5 pl-6 pr-2.5 flex items-end shadow-[0_20px_40px_rgba(0,0,0,0.4)] ring-1 ring-white/10 focus-within:ring-accent/40 focus-within:ring-2 focus-within:bg-black/60 transition-all duration-300">
+                <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#050508] via-[#050508]/95 to-transparent px-3 pb-4 pt-16 sm:px-4 sm:pb-5 sm:pt-20 md:px-6">
+                    <div className="pointer-events-auto mx-auto max-w-3xl">
+                        <div className="chat-input-bar flex items-end gap-2 rounded-2xl p-2 pl-3 sm:pl-4">
                             <textarea
-                                className="w-full bg-transparent text-white placeholder-white/30 resize-none py-3.5 focus:outline-none max-h-40 font-medium text-[15px] leading-relaxed"
-                                rows="1"
-                                placeholder={isParsed ? "Query the repository graph..." : "Connect a repository to ask questions..."}
+                                className="max-h-32 min-h-[42px] flex-1 resize-none bg-transparent py-2.5 text-sm text-white placeholder-white/30 outline-none sm:max-h-36 sm:min-h-[44px] sm:py-3 sm:text-[15px]"
+                                rows={1}
+                                placeholder={
+                                    isParsed
+                                        ? 'Ask anything about this codebase…'
+                                        : isParsing
+                                            ? 'Hang tight — still setting up…'
+                                            : 'Connect a repo above to start'
+                                }
                                 value={input}
-                                disabled={!isParsed || isTyping}
+                                disabled={!isParsed || isTyping || isParsing}
                                 onChange={(e) => {
                                     setInput(e.target.value);
                                     e.target.style.height = 'auto';
-                                    e.target.style.height = (e.target.scrollHeight) + 'px';
+                                    e.target.style.height = `${e.target.scrollHeight}px`;
                                 }}
                                 onKeyDown={(e) => {
                                     if (e.key === 'Enter' && !e.shiftKey) {
@@ -304,28 +588,20 @@ const App = () => {
                                 }}
                             />
                             <button
-                                className={`p-3.5 rounded-xl flex-shrink-0 transition-all duration-300 ml-2 ${input.trim() && isParsed && !isTyping
-                                        ? 'bg-accent text-background hover:bg-accent/90 shadow-[0_0_15px_rgba(0,212,255,0.3)] hover:shadow-[0_0_20px_rgba(0,212,255,0.5)] transform hover:scale-105'
-                                        : 'bg-white/5 text-white/20 cursor-not-allowed'
-                                    }`}
-                                onClick={handleSend}
-                                disabled={!input.trim() || !isParsed || isTyping}
+                                onClick={() => handleSend()}
+                                disabled={!input.trim() || !isParsed || isTyping || isParsing}
+                                className="btn-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-xl disabled:cursor-not-allowed disabled:opacity-40 sm:h-11 sm:w-11"
+                                aria-label="Send message"
                             >
-                                <Send size={18} />
+                                <Send size={17} />
                             </button>
                         </div>
-                        <div className="flex justify-between items-center mt-4 px-3 font-mono text-[10px] text-white/30 uppercase tracking-[0.15em]">
-                            <div className="flex space-x-6">
-                                <span className="flex items-center"><span className="w-1 h-1 bg-white/20 rounded-full mr-2"></span>Model: GPT-4-R2G</span>
-                                <span className="flex items-center"><span className="w-1 h-1 bg-white/20 rounded-full mr-2"></span>Reranker: Cross-Encoder</span>
-                            </div>
-                            <div className="flex items-center text-accent/60">
-                                <div className="w-1.5 h-1.5 bg-accent rounded-full mr-2 shadow-[0_0_5px_rgba(0,212,255,0.5)]"></div>
-                                12.4k Context
-                            </div>
+                        <div className="mt-2.5 flex flex-col items-center justify-between gap-1 text-[10px] text-white/25 sm:flex-row sm:gap-0">
+                            <span>Enter to send · Shift+Enter for new line</span>
+                            <span className="hidden sm:inline">Powered by graph + semantic search</span>
                         </div>
                     </div>
-                </div>
+                </footer>
             </div>
         </div>
     );

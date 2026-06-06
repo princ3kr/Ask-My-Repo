@@ -1,27 +1,52 @@
 import sys
+from typing import Callable, Optional
+
 from src.backend.chunking.repo_parser import get_files, get_filename
 from src.backend.chunking.chunk_builder import ChunkBuilder
 from src.backend.services.vector_db import VectorStore
 
-def map_repository(repo_url: str):
-    print(f"[*] Fetching files from {repo_url}...")
+ProgressCallback = Callable[[str, int, str], None]
+
+
+def map_repository(repo_url: str, on_progress: Optional[ProgressCallback] = None):
+    def report(stage: str, progress: int, message: str):
+        if on_progress:
+            on_progress(stage, progress, message)
+
+    report("fetching", 8, "Downloading your repository…")
     files = get_files(repo_url)
     repo_id = get_filename(repo_url)
-    
-    # 1. Neo4j Graph DB Ingestion
-    print("[*] Processing AST structure and pushing to Neo4j...")
+    file_count = len(files)
+
+    report("graph_building", 22, f"Reading {file_count} files to understand the layout…")
     builder = ChunkBuilder(files=files, repo_id=repo_id)
-    builder.build()          # populate dependency graph (must run before push_to_neo4j)
+    builder.build()
+
+    report("graph_saving", 42, "Connecting files, classes, and dependencies…")
     builder.push_to_neo4j()
-    
-    # 2. Qdrant Vector DB Ingestion
-    print("[*] Splitting files into code chunks and indexing in Qdrant...")
+    nodes_count = builder.G.number_of_nodes()
+    edges_count = builder.G.number_of_edges()
+
+    report("vector_building", 55, "Breaking code into easy-to-search pieces…")
     vstore = VectorStore(files=files, collection_name=f"repo_{repo_id}")
+    vstore.reset_collection()
     vstore.build()
-    vstore.push()
-    
+
+    def on_push(progress_pct: float, _detail: str):
+        overall = 58 + int(progress_pct * 0.32)
+        report("vector_saving", overall, "Making everything searchable…")
+
+    report("vector_saving", 60, "Making everything searchable…")
+    vstore.push(on_progress=on_push)
+
+    report("assistant_ready", 95, "Almost ready — preparing your assistant…")
     print("[+] Repository indexing successfully completed!")
-    return repo_id, files
+    return {
+        "repo_id": repo_id,
+        "files": files,
+        "nodes_count": nodes_count,
+        "edges_count": edges_count,
+    }
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

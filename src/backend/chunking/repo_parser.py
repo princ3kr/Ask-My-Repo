@@ -5,7 +5,17 @@ from urllib.parse import urlparse
 
 ignores = { ".git", ".gitignore", ".lock", ".venv", "__pycache__", "node_modules", ".vscode", "pyproject.toml", "__init__.py", ".python-version", "requirements.txt" }
 
+def normalize_repo_url(url: str) -> str:
+    url = url.strip()
+    if not url:
+        return url
+    if not url.startswith(("http://", "https://", "git@")):
+        url = f"https://{url}"
+    return url.rstrip("/")
+
+
 def get_filename(url: str):
+    url = normalize_repo_url(url)
     if url[-4:] == ".git":
         url = url[:-4]
         
