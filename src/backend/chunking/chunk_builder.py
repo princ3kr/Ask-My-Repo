@@ -20,6 +20,42 @@ class ChunkBuilder:
         self.name_index = self.build_name_index()
         self.module_index = self.build_module_index()
 
+    @staticmethod
+    def repo_exists(repo_id: str) -> bool:
+        driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+        try:
+            with driver.session() as session:
+                result = session.run(
+                    "MATCH (r:Repo {repo_id: $repo_id}) RETURN count(r) AS count",
+                    repo_id=repo_id,
+                )
+                record = result.single()
+                return bool(record and record["count"] > 0)
+        finally:
+            driver.close()
+
+    @staticmethod
+    def get_repo_graph_counts(repo_id: str) -> tuple[int, int]:
+        driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+        try:
+            with driver.session() as session:
+                nodes_result = session.run(
+                    "MATCH (n {repo_id: $repo_id}) RETURN count(n) AS count",
+                    repo_id=repo_id,
+                )
+                edges_result = session.run(
+                    "MATCH (n {repo_id: $repo_id})-[r]-() RETURN count(r) AS count",
+                    repo_id=repo_id,
+                )
+                nodes = nodes_result.single()
+                edges = edges_result.single()
+                return (
+                    int(nodes["count"]) if nodes else 0,
+                    int(edges["count"]) if edges else 0,
+                )
+        finally:
+            driver.close()
+
     def get_node_style(self, filepath: str) -> dict:
         """Dynamically assigns colours based on top-level directory — matches BuildGraph.get_node_style()"""
         parts = filepath.split("/")

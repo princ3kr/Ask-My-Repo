@@ -18,6 +18,8 @@ from src.backend.map.mapper import map_repository
 # pyrefly: ignore [missing-import]
 from src.backend.job_status import create_job, update_job, get_job, job_to_dict
 # pyrefly: ignore [missing-import]
+from src.backend.services.repo_activity import activity_tracker
+# pyrefly: ignore [missing-import]
 from langchain_openai import ChatOpenAI
 
 app = FastAPI(title="Ask My repo API")
@@ -31,6 +33,12 @@ app.add_middleware(
 )
 
 active_engines: Dict[str, ChatWorkflow] = {}
+
+
+@app.on_event("startup")
+def startup_event():
+    """Start the background cleanup task on API startup."""
+    activity_tracker.start_cleanup_task()
 
 
 def friendly_error(message: str) -> str:
@@ -66,6 +74,9 @@ def _run_parse_job(job_id: str, repo_url: str) -> None:
         mapped = map_repository(repo_url, on_progress=on_progress)
         repo_id = mapped["repo_id"]
         files = mapped["files"]
+
+        # Record activity for this repo
+        activity_tracker.record_activity(repo_id)
 
         llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
         engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
@@ -116,6 +127,9 @@ def chat(request: ChatRequest):
     if not repo_id:
         raise HTTPException(status_code=400, detail="Invalid repository URL.")
 
+    # Record activity for this repo
+    activity_tracker.record_activity(repo_id)
+
     if repo_id not in active_engines:
         try:
             files = get_files(repo_url)
@@ -152,6 +166,40 @@ def chat(request: ChatRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=friendly_error(str(e)))
+
+
+@app.get("/api/activity")
+def get_activity_status():
+    """Get current activity log and cleanup configuration."""
+    from src.backend.services.repo_activity import INACTIVITY_TIMEOUT_HOURS, CLEANUP_CHECK_INTERVAL_MINUTES
+    
+    activity_log = {}
+    for repo_id, last_activity in activity_tracker.activity_log.items():
+        activity_log[repo_id] = last_activity.isoformat()
+    
+    return {
+        "status": "ok",
+        "active_repos": len(activity_tracker.activity_log),
+        "activity_log": activity_log,
+        "inactivity_timeout_hours": INACTIVITY_TIMEOUT_HOURS,
+        "cleanup_check_interval_minutes": CLEANUP_CHECK_INTERVAL_MINUTES,
+        "active_engines_count": len(active_engines),
+    }
+
+
+@app.post("/api/cleanup/manual/{repo_id}")
+def manual_cleanup(repo_id: str):
+    """Manually trigger cleanup for a specific repo."""
+    if repo_id in active_engines:
+        del active_engines[repo_id]
+    
+    success = activity_tracker.cleanup_repo(repo_id)
+    return {
+        "status": "success" if success else "partial_failure",
+        "message": f"Cleanup triggered for repo '{repo_id}'.",
+        "removed_from_cache": repo_id in active_engines,
+    }
+
 
 if __name__ == "__main__":
     # pyrefly: ignore [missing-import]

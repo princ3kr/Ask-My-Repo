@@ -8,8 +8,16 @@ from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
-base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ['HF_HOME'] = os.path.join(base_dir, 'models')
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+model_cache_dir = os.path.join(base_dir, 'src', 'models')
+fastembed_cache_dir = os.path.join(model_cache_dir, 'fastembed')
+
+os.makedirs(fastembed_cache_dir, exist_ok=True)
+os.makedirs(model_cache_dir, exist_ok=True)
+
+os.environ['HF_HOME'] = model_cache_dir
+os.environ['FASTEMBED_CACHE_PATH'] = fastembed_cache_dir
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
 
 # ONNX fastembed pads every item in a batch to the longest sequence — one huge
 # chunk can blow memory (50GB+). Keep chunks small and batches tiny.
@@ -32,11 +40,26 @@ class VectorStore:
             
         self.client = QdrantClient(url=url, api_key=api_key, timeout=60)
         
-        self.client.set_model("jinaai/jina-embeddings-v2-base-code")
-        self.client.set_sparse_model("Qdrant/bm25")
+        self.client.set_model(
+            "jinaai/jina-embeddings-v2-base-code",
+            cache_dir=fastembed_cache_dir,
+        )
+        self.client.set_sparse_model(
+            "Qdrant/bm25",
+            cache_dir=fastembed_cache_dir,
+        )
         
         if not self.client.collection_exists(self.collection_name):
             self._create_collection()
+
+    @classmethod
+    def collection_exists(cls, collection_name: str) -> bool:
+        url = os.getenv("QDRANT_END_POINT")
+        api_key = os.getenv("QDRANT_API_KEY")
+        if not url or not api_key:
+            raise ValueError("Please set QDRANT_END_POINT and QDRANT_API_KEY in your .env file!")
+        client = QdrantClient(url=url, api_key=api_key, timeout=60)
+        return client.collection_exists(collection_name)
 
     def _create_collection(self):
         self.client.create_collection(
@@ -59,8 +82,12 @@ class VectorStore:
     @property
     def embed_model(self):
         if self._embed_model is None:
-            print("Loading SentenceTransformer model...")
-            self._embed_model = SentenceTransformer("jinaai/jina-embeddings-v2-base-code", trust_remote_code=True)
+            print("Loading SentenceTransformer model from cache:", model_cache_dir)
+            self._embed_model = SentenceTransformer(
+                "jinaai/jina-embeddings-v2-base-code",
+                cache_folder=model_cache_dir,
+                trust_remote_code=True,
+            )
         return self._embed_model
 
     @staticmethod
