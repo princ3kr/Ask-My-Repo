@@ -1,11 +1,100 @@
 import sys
 from typing import Callable, Optional
 
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+
 from src.backend.chunking.repo_parser import get_files, get_filename
 from src.backend.chunking.chunk_builder import ChunkBuilder
 from src.backend.services.vector_db import VectorStore
 
 ProgressCallback = Callable[[str, int, str], None]
+
+
+class EntryPointReview(BaseModel):
+    path: str = Field(..., description="File path relative to repo root")
+    is_entry: bool = Field(..., description="Whether this file is an application entry point")
+    kind: str = Field(default="", description="Entry kind: http_endpoint, main_block, app_runner, cli_entry, task_entry, or empty")
+    confidence: float = Field(default=0.0, description="Confidence score 0-1")
+    reason: str = Field(default="", description="Brief reason for the classification")
+
+
+class EntryPointReviewBatch(BaseModel):
+    results: list[EntryPointReview]
+
+
+def _llm_review_entry_points(files: dict, flagged_paths: list[str]) -> list[dict]:
+    """Second-pass LLM review for uncertain entry point candidates."""
+    if not flagged_paths:
+        return []
+
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=2000, max_retries=3, timeout=60.0)
+    structured_llm = llm.with_structured_output(EntryPointReviewBatch)
+
+    file_summaries = []
+    for path in flagged_paths:
+        data = files.get(path, {})
+        fn_names = [f["name"] for f in data.get("functions", [])]
+        decorators = data.get("decorator_names", [])
+        imports = [imp.get("module", "") for imp in data.get("imports", [])[:15]]
+        file_summaries.append(
+            f"PATH: {path}\n"
+            f"FUNCTIONS: {', '.join(fn_names[:20]) or '(none)'}\n"
+            f"DECORATORS: {', '.join(decorators[:15]) or '(none)'}\n"
+            f"IMPORTS: {', '.join(imports) or '(none)'}"
+        )
+
+    prompt = f"""You are a Python codebase analyst. For each file below, determine if it is an application entry point.
+
+Entry kinds:
+- http_endpoint: FastAPI/Flask/Django route handlers or API bootstrap
+- main_block: script entry via if __name__ == '__main__'
+- app_runner: starts a web server or application loop (uvicorn, gunicorn, app.run)
+- cli_entry: command-line interface entry (click, typer, argparse main)
+- task_entry: background task worker entry (celery task definitions as entry)
+- (empty string if not an entry point)
+
+Only mark is_entry=true when reasonably confident. Conventional filenames like main.py, app.py, server.py
+are often but not always entry points — use function names and imports as evidence.
+
+FILES:
+{chr(10).join(file_summaries)}
+"""
+
+    try:
+        batch: EntryPointReviewBatch = structured_llm.invoke([
+            ("system", "Classify Python file entry points. Return one result per file path."),
+            ("user", prompt),
+        ])
+        merged = []
+        for r in batch.results:
+            if r.is_entry:
+                fn_qname = None
+                data = files.get(r.path, {})
+                if data.get("functions"):
+                    fn = data["functions"][0]
+                    fn_qname = fn.get("qualified_name")
+                merged.append({
+                    "path": r.path,
+                    "qualified_name": fn_qname or f"{r.path}::main",
+                    "is_entry": True,
+                    "kind": r.kind or "app_runner",
+                    "confidence": r.confidence,
+                    "source": "llm",
+                    "reason": r.reason,
+                })
+                files.setdefault(r.path, {})["entry_points"] = files.get(r.path, {}).get("entry_points", []) + [{
+                    "qualified_name": fn_qname or f"{r.path}::main",
+                    "name": "main",
+                    "kind": r.kind or "app_runner",
+                    "confidence": r.confidence,
+                    "source": "llm",
+                    "reason": r.reason,
+                }]
+        return merged
+    except Exception as e:
+        print(f"[EntryPoint LLM] Review failed: {e}")
+        return []
 
 
 def map_repository(repo_url: str, on_progress: Optional[ProgressCallback] = None):
@@ -43,6 +132,15 @@ def map_repository(repo_url: str, on_progress: Optional[ProgressCallback] = None
 
         report("graph_saving", 42, "Connecting files, classes, and dependencies…")
         builder.push_to_neo4j()
+
+        flagged_paths = [p for p, d in files.items() if d.get("entry_flagged")]
+        if flagged_paths:
+            report("graph_saving", 45, f"Reviewing {len(flagged_paths)} potential entry points…")
+            llm_entries = _llm_review_entry_points(files, flagged_paths)
+            if llm_entries:
+                ChunkBuilder.apply_entry_points(repo_id, llm_entries)
+                print(f"[+] LLM entry point review: {len(llm_entries)} entries confirmed.")
+
         nodes_count = builder.G.number_of_nodes()
         edges_count = builder.G.number_of_edges()
 
@@ -68,6 +166,7 @@ def map_repository(repo_url: str, on_progress: Optional[ProgressCallback] = None
         "nodes_count": nodes_count,
         "edges_count": edges_count,
     }
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

@@ -2,10 +2,12 @@
 from fastapi import FastAPI, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+from typing import Optional, List, Dict
 from dotenv import load_dotenv
 import threading
+import os
 
 load_dotenv()
 
@@ -33,12 +35,18 @@ app.add_middleware(
 )
 
 active_engines: Dict[str, ChatWorkflow] = {}
+session_histories: Dict[str, List[Dict[str, str]]] = {}
+MAX_HISTORY_TURNS = 16
+
+
+def _engine_key(repo_id: str, session_id: str) -> str:
+    return f"{repo_id}:{session_id}"
 
 
 @app.on_event("startup")
 def startup_event():
     """Start the background cleanup task on API startup."""
-    activity_tracker.start_cleanup_task()
+    activity_tracker.start_cleanup_task(engine_cache=active_engines, history_store=session_histories)
 
 
 def friendly_error(message: str) -> str:
@@ -63,7 +71,19 @@ class ParseRequest(BaseModel):
 class ChatRequest(BaseModel):
     repo_url: str
     query: str
-    history: Optional[List[Dict[str, str]]] = []
+    session_id: str = Field(..., min_length=1, description="Client-generated UUID persisted in localStorage")
+
+
+def _get_or_create_engine(repo_id: str, session_id: str, repo_url: str) -> ChatWorkflow:
+    key = _engine_key(repo_id, session_id)
+    if key in active_engines:
+        return active_engines[key]
+
+    files = get_files(repo_url)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
+    engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
+    active_engines[key] = engine
+    return engine
 
 
 def _run_parse_job(job_id: str, repo_url: str) -> None:
@@ -73,14 +93,8 @@ def _run_parse_job(job_id: str, repo_url: str) -> None:
 
         mapped = map_repository(repo_url, on_progress=on_progress)
         repo_id = mapped["repo_id"]
-        files = mapped["files"]
 
-        # Record activity for this repo
         activity_tracker.record_activity(repo_id)
-
-        llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
-        engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
-        active_engines[repo_id] = engine
 
         update_job(
             job_id,
@@ -90,7 +104,7 @@ def _run_parse_job(job_id: str, repo_url: str) -> None:
             status="done",
             result={
                 "repo_id": repo_id,
-                "files_count": len(files),
+                "files_count": len(mapped["files"]),
                 "nodes_count": mapped["nodes_count"],
                 "edges_count": mapped["edges_count"],
             },
@@ -126,43 +140,53 @@ def chat(request: ChatRequest):
     repo_id = get_filename(repo_url)
     if not repo_id:
         raise HTTPException(status_code=400, detail="Invalid repository URL.")
+    if not request.session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id is required.")
 
-    # Record activity for this repo
+    session_id = request.session_id.strip()
+    engine_key = _engine_key(repo_id, session_id)
+
     activity_tracker.record_activity(repo_id)
 
-    if repo_id not in active_engines:
-        try:
-            files = get_files(repo_url)
-            llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
-            engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
-            active_engines[repo_id] = engine
-        except Exception:
-            raise HTTPException(status_code=400, detail="Repo not indexed. Please connect and index first.")
+    try:
+        engine = _get_or_create_engine(repo_id, session_id, repo_url)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Repo not indexed. Please connect and index first.")
 
-    engine = active_engines[repo_id]
+    history = session_histories.get(engine_key, [])
 
     initial_state = {
         "repo_id": repo_id,
+        "session_id": session_id,
         "current_agent": "router",
         "router_decision": "hybrid",
         "reason": "",
         "context": "",
         "plan": [],
         "user_query": request.query,
-        "user_history": request.history or [],
+        "rewritten_query": "",
+        "user_history": history,
         "cypher_query": "",
         "graph_result": None,
         "vector_result": [],
-        "final_answer": ""
+        "architect_subtype": "",
+        "final_answer": "",
     }
 
     try:
         result = engine.app.invoke(initial_state)
+        answer = result.get("final_answer", "")
+
+        history.append({"role": "user", "content": request.query})
+        history.append({"role": "assistant", "content": answer})
+        session_histories[engine_key] = history[-MAX_HISTORY_TURNS:]
+
         return {
             "status": "success",
             "decision": result.get("router_decision", "unknown"),
             "reason": result.get("reason", ""),
-            "answer": result.get("final_answer", "")
+            "answer": answer,
+            "rewritten_query": result.get("rewritten_query", ""),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=friendly_error(str(e)))
@@ -172,11 +196,11 @@ def chat(request: ChatRequest):
 def get_activity_status():
     """Get current activity log and cleanup configuration."""
     from src.backend.services.repo_activity import INACTIVITY_TIMEOUT_HOURS, CLEANUP_CHECK_INTERVAL_MINUTES
-    
+
     activity_log = {}
     for repo_id, last_activity in activity_tracker.activity_log.items():
         activity_log[repo_id] = last_activity.isoformat()
-    
+
     return {
         "status": "ok",
         "active_repos": len(activity_tracker.activity_log),
@@ -184,21 +208,78 @@ def get_activity_status():
         "inactivity_timeout_hours": INACTIVITY_TIMEOUT_HOURS,
         "cleanup_check_interval_minutes": CLEANUP_CHECK_INTERVAL_MINUTES,
         "active_engines_count": len(active_engines),
+        "active_sessions_count": len(session_histories),
     }
 
 
 @app.post("/api/cleanup/manual/{repo_id}")
 def manual_cleanup(repo_id: str):
     """Manually trigger cleanup for a specific repo."""
-    if repo_id in active_engines:
-        del active_engines[repo_id]
-    
-    success = activity_tracker.cleanup_repo(repo_id)
+    removed_engine_keys = [
+        k for k in list(active_engines.keys()) if k.startswith(f"{repo_id}:")
+    ]
+    for k in removed_engine_keys:
+        del active_engines[k]
+
+    removed_history_keys = [
+        k for k in list(session_histories.keys()) if k.startswith(f"{repo_id}:")
+    ]
+    for k in removed_history_keys:
+        del session_histories[k]
+
+    success = activity_tracker.cleanup_repo(
+        repo_id,
+        engine_cache=active_engines,
+        history_store=session_histories,
+    )
+    # Attempt to remove cached graph HTML for the repo and report whether it was cleared
+    notebook_dir = os.path.join(os.getcwd(), "notebook")
+    per_repo_path = os.path.join(notebook_dir, f"{repo_id}_graph.html")
+    generic_path = os.path.join(notebook_dir, "graph.html")
+    graph_cache_cleared = {"per_repo": False, "generic": False}
+    try:
+        if os.path.exists(per_repo_path):
+            os.remove(per_repo_path)
+            graph_cache_cleared["per_repo"] = True
+        if os.path.exists(generic_path):
+            os.remove(generic_path)
+            graph_cache_cleared["generic"] = True
+    except Exception:
+        # leave boolean flags as-is if deletion failed for either
+        pass
+
     return {
         "status": "success" if success else "partial_failure",
         "message": f"Cleanup triggered for repo '{repo_id}'.",
-        "removed_from_cache": repo_id in active_engines,
+        "removed_engine_sessions": len(removed_engine_keys),
+        "removed_history_sessions": len(removed_history_keys),
+        "graph_cache_cleared": graph_cache_cleared,
     }
+
+
+@app.get("/api/graph/{repo_id}")
+def get_graph(repo_id: str):
+    """Return the previously saved pyvis HTML for a repo, if present."""
+    # Prefer per-repo filename, fall back to generic 'graph.html' for older saves
+    notebook_dir = os.path.join(os.getcwd(), "notebook")
+    per_repo = os.path.join(notebook_dir, f"{repo_id}_graph.html")
+    generic = os.path.join(notebook_dir, "graph.html")
+
+    chosen = None
+    if os.path.exists(per_repo):
+        chosen = per_repo
+    elif os.path.exists(generic):
+        chosen = generic
+
+    if not chosen:
+        raise HTTPException(status_code=404, detail="Graph not found")
+
+    try:
+        with open(chosen, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        return HTMLResponse(content=content, media_type="text/html")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

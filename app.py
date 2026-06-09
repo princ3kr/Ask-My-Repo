@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 from dotenv import load_dotenv
@@ -12,48 +13,67 @@ from src.backend.chunking.repo_parser import get_files, get_filename
 
 def run_chat_cli(repo_url: str):
     repo_id = get_filename(repo_url)
+    session_id = str(uuid.uuid4())
+    history: list[dict[str, str]] = []
+
     print(f"[*] Preparing local files for {repo_id}...")
     files = get_files(repo_url)
-    
+
     print("[*] Initializing ChatEngine workflow...")
     llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
     engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
-    
+
     print("\n" + "="*50)
     print(f"Chat Engine ready for Repository: {repo_id}")
+    print(f"Session: {session_id}")
     print("Type your questions below. Type 'exit' to quit.")
     print("="*50 + "\n")
-    
+
     while True:
         try:
             query = input("Ask a question: ").strip()
-            if not query: continue
-            if query.lower() in ("exit", "quit"): break
-            
+            if not query:
+                continue
+            if query.lower() in ("exit", "quit"):
+                break
+
             initial_state = {
                 "repo_id": repo_id,
+                "session_id": session_id,
                 "current_agent": "router",
                 "router_decision": "hybrid",
                 "reason": "",
+                "context": "",
                 "plan": [],
                 "user_query": query,
-                "user_history": [],
+                "rewritten_query": "",
+                "user_history": history,
                 "cypher_query": "",
                 "graph_result": None,
                 "vector_result": [],
-                "final_answer": ""
+                "architect_subtype": "",
+                "final_answer": "",
             }
-            
+
             print("[*] Executing LangGraph workflow...")
             result = engine.app.invoke(initial_state)
-            
+
+            answer = result['final_answer']
+            rewritten = result.get('rewritten_query', '')
+            if rewritten and rewritten != query:
+                print(f"[Rewritten] {rewritten}")
+
             print(f"\n[Agent Logic] Decision: {result['router_decision'].upper()} | Reason: {result['reason']}")
-            print(f"[Synthesized Response]\n{result['final_answer']}")
+            print(f"[Synthesized Response]\n{answer}")
             print("-" * 50 + "\n")
-            
+
+            history.append({"role": "user", "content": query})
+            history.append({"role": "assistant", "content": answer})
+            history = history[-16:]
+
         except KeyboardInterrupt:
             break
-            
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python app.py <repo_url>")

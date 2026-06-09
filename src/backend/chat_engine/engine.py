@@ -2,43 +2,83 @@ import time
 from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
 from src.backend.agent_state.state import AgentState, GraphResult
 from src.backend.services.query_engine import QueryEngine
 from src.backend.services.vector_db import VectorStore
 
+
 class RouterDecision(BaseModel):
-    decision: Literal['graph_only', 'hybrid'] = Field(
+    decision: Literal['graph_only', 'hybrid', 'architecture'] = Field(
         ...,
-        description="graph_only ONLY for pure structural/dependency/topology questions. hybrid for everything else."
+        description=(
+            "graph_only for pure structural questions; "
+            "architecture for system-wide flow/overview/trace questions; "
+            "hybrid for everything else."
+        ),
     )
     reason: str = Field(..., description="Explanation of why this routing path was selected")
+
+
+class RewrittenQuery(BaseModel):
+    rewritten_query: str = Field(
+        ...,
+        description="Self-contained query that resolves pronouns/references using conversation history",
+    )
+
 
 class ResponseModel(BaseModel):
     answer: str = Field(..., description="Response of the query from the llm model")
     score: float = Field(..., description="Confidence score of the response")
     sources: str = Field(..., description="File name used for response")
 
+
+def _format_history(history: list) -> str:
+    if not history:
+        return ""
+    lines = []
+    for msg in history[-8:]:
+        if isinstance(msg, dict):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+        elif isinstance(msg, HumanMessage):
+            role, content = "user", msg.content
+        elif isinstance(msg, AIMessage):
+            role, content = "assistant", msg.content
+        else:
+            continue
+        lines.append(f"{role.capitalize()}: {content}")
+    return "\n".join(lines)
+
+
 class AnswerEngine:
     def __init__(self, llm):
         self.llm = llm.with_structured_output(ResponseModel)
 
-    def generate_response(self, query: str, context: str):
+    def generate_response(self, query: str, context: str, history_text: str = ""):
+        history_block = f"\n\nConversation history:\n{history_text}" if history_text else ""
         prompt = ChatPromptTemplate.from_messages([
             ("system", """
                 You are a code repository assistant.
                 Answer only from the provided context.
+                Use conversation history to resolve follow-up references (e.g. "it", "that function").
                 When asked about initial or default values, prioritize code that
                 constructs or initializes objects (e.g. GraphState(...), __init__,
                 initial_state) over code that updates or transitions values.
                 Sources should be file names used to answer.
                 Confidence should be between 0 and 1.
             """),
-            ("user", "Context:\n{context}\n\nQuestion: {query}")
+            ("user", "Context:\n{context}{history_block}\n\nQuestion: {query}"),
         ])
         chain = prompt | self.llm
-        return chain.invoke({"context": context, "query": query})
+        return chain.invoke({
+            "context": context,
+            "history_block": history_block,
+            "query": query,
+        })
+
 
 def format_documents(graph_data: list[dict], vector_data: list[dict], decision: str) -> str:
     sections = []
@@ -74,17 +114,17 @@ def format_documents(graph_data: list[dict], vector_data: list[dict], decision: 
 
     return "\n\n".join(sections).strip() if sections else ""
 
+
 class ChatWorkflow:
     def __init__(self, repo_id: str, files: dict, llm):
         self.repo_id = repo_id
         self.files = files
         self.llm = llm
-        
-        # Initialize services
+
         self.query_engine = QueryEngine(repo_id=repo_id, db_client=None, llm=llm)
         self.vector_store = VectorStore(files=files, collection_name=f"repo_{repo_id}")
         self.query_engine.db_client = self.vector_store
-        
+
         self.answer_engine = AnswerEngine(llm)
         self.app = self._build_graph()
 
@@ -92,7 +132,7 @@ class ChatWorkflow:
         router_llm = self.llm.with_structured_output(RouterDecision)
         router_prompt = ChatPromptTemplate.from_messages([
             ('system', """You are a query router for code repository Q&A.
-                The knowledge graph stores: files, imports, classes, functions, methods, inheritance, call edges.
+                The knowledge graph stores: files, imports, classes, functions, methods, inheritance, call edges, entry points.
                 It has NO knowledge of variable values, runtime state, or full code behavior.
 
                 Classify into:
@@ -108,6 +148,14 @@ class ChatWorkflow:
                 - transitive dependencies of <file>
                 - what files depend on <file> (reverse lookup)
 
+                architecture — system-wide structural questions:
+                - how does a request flow through the system
+                - what is the end-to-end architecture
+                - trace the call chain from API to DB
+                - give me a system overview
+                - how are components connected
+                - what are the main entry points and how do they connect
+
                 hybrid — everything else:
                 - what a function/method does internally or returns
                 - what happens when a condition is met
@@ -116,106 +164,190 @@ class ChatWorkflow:
                 - what database / framework / library is used
                 - any question about runtime behavior, state, or logic
 
+                RULE: Architecture questions ask about flows, overviews, or multi-hop system structure.
                 RULE: If mentioning specific variables/fields or asking about behavior → hybrid.
                 When in doubt, choose hybrid."""),
-            ('user', "query: {query}")
+            ('user', "query: {query}"),
         ])
-        
+
         decision_chain = router_prompt | router_llm
         res: RouterDecision = decision_chain.invoke({"query": state["user_query"]})
-        
-        # Save decision metadata in QueryEngine router cache to match notebook structure
+
         self.query_engine._router_cache[state["user_query"]] = res
-        
-        # Map graph_only to graph for state compatibility
-        router_decision_val = "graph" if res.decision == "graph_only" else "hybrid"
-        
+
+        if res.decision == "architecture":
+            router_decision_val = "architecture"
+        elif res.decision == "graph_only":
+            router_decision_val = "graph"
+        else:
+            router_decision_val = "hybrid"
+
         return {
             "router_decision": router_decision_val,
             "reason": res.reason,
-            "current_agent": "router"
+            "current_agent": "router",
+        }
+
+    def query_rewriter_node(self, state: AgentState) -> dict:
+        history = state.get("user_history") or []
+        if not history:
+            return {
+                "rewritten_query": state["user_query"],
+                "current_agent": "query_rewriter",
+            }
+
+        rewriter_llm = self.llm.with_structured_output(RewrittenQuery)
+        history_text = _format_history(history)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """Rewrite the user's latest question to be fully self-contained.
+                Resolve pronouns and references (it, that, they, the function, etc.) using conversation history.
+                Keep the same intent. If already self-contained, return it unchanged."""),
+            ("user", "History:\n{history}\n\nLatest question: {query}"),
+        ])
+        chain = prompt | rewriter_llm
+        result: RewrittenQuery = chain.invoke({
+            "history": history_text,
+            "query": state["user_query"],
+        })
+        return {
+            "rewritten_query": result.rewritten_query,
+            "current_agent": "query_rewriter",
+        }
+
+    def architect_node(self, state: AgentState) -> dict:
+        query = state.get("rewritten_query") or state["user_query"]
+        res = self.query_engine.architect_search(query)
+
+        graph_res = None
+        vector_res = []
+
+        if res:
+            graph_res = GraphResult(
+                is_fallback=False,
+                data=res.get("data", []),
+                method="architect",
+                timestamp=res.get("timestamp", time.time()),
+            )
+
+            critical_files = self.query_engine.extract_critical_path_files(res, limit=4)
+            if critical_files:
+                vector_data = self.vector_store.vector_search(query, filenames=critical_files)
+                reranked = self.vector_store.rerank(vector_data, query, top_k=4)
+                vector_res = [
+                    {"metadata": item[0], "score": float(item[1]), "content": item[2]}
+                    for item in reranked
+                ]
+
+        return {
+            "graph_result": graph_res,
+            "vector_result": vector_res,
+            "architect_subtype": res.get("subtype", "") if res else "",
+            "current_agent": "architect",
         }
 
     def graph_node(self, state: AgentState) -> dict:
-        res = self.query_engine.graph_search(state["user_query"])
+        query = state.get("rewritten_query") or state["user_query"]
+        res = self.query_engine.graph_search(query)
         graph_res = None
         if res:
             graph_res = GraphResult(
                 is_fallback=res.get("is_fallback", False),
                 data=res.get("data", []),
                 method=res.get("method", "llm"),
-                timestamp=res.get("timestamp", time.time())
+                timestamp=res.get("timestamp", time.time()),
             )
         return {
             "graph_result": graph_res,
-            "current_agent": "graph"
+            "current_agent": "graph",
         }
 
     def vector_node(self, state: AgentState) -> dict:
+        query = state.get("rewritten_query") or state["user_query"]
         graph_res = state.get("graph_result")
         filenames = []
-        
+
         if graph_res:
-            filenames = self.query_engine._extract_filenames_safe(graph_res, state["user_query"])
-            
+            filenames = self.query_engine._extract_filenames_safe(graph_res, query)
+
         if filenames:
-            vector_data = self.vector_store.vector_search(state["user_query"], filenames=filenames)
+            vector_data = self.vector_store.vector_search(query, filenames=filenames)
         else:
-            vector_data = self.vector_store.search(state["user_query"])
-            
-        reranked = self.vector_store.rerank(vector_data, state["user_query"], top_k=5)
-        
+            vector_data = self.vector_store.search(query)
+
+        reranked = self.vector_store.rerank(vector_data, query, top_k=5)
+
         vector_res = [
             {"metadata": item[0], "score": float(item[1]), "content": item[2]}
             for item in reranked
         ]
         return {
             "vector_result": vector_res,
-            "current_agent": "vector"
+            "current_agent": "vector",
         }
 
     def synthesizer_node(self, state: AgentState) -> dict:
         graph_res = state.get("graph_result")
         graph_data = graph_res["data"] if graph_res else []
         vector_res = state.get("vector_result", [])
-        
+
         formatted_context = format_documents(graph_data, vector_res, state["router_decision"])
-        
-        response = self.answer_engine.generate_response(state["user_query"], formatted_context)
-        
+        history_text = _format_history(state.get("user_history") or [])
+        query = state.get("rewritten_query") or state["user_query"]
+
+        response = self.answer_engine.generate_response(query, formatted_context, history_text)
+
         return {
             "context": formatted_context,
             "final_answer": response.answer,
-            "current_agent": "synthesizer"
+            "current_agent": "synthesizer",
         }
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
-        
-        # Add Nodes
+
         workflow.add_node("router", self.router_node)
+        workflow.add_node("query_rewriter", self.query_rewriter_node)
+        workflow.add_node("architect", self.architect_node)
         workflow.add_node("graph", self.graph_node)
         workflow.add_node("vector", self.vector_node)
         workflow.add_node("synthesizer", self.synthesizer_node)
-        
-        # Set Entry Point
+
         workflow.set_entry_point("router")
-        
-        # Conditional routing edge to check for meaningful graph results
+
+        def route_after_router(state: AgentState):
+            decision = state["router_decision"]
+            if decision == "architecture":
+                return "architect"
+            if decision == "hybrid":
+                return "query_rewriter"
+            return "graph"
+
+        workflow.add_conditional_edges(
+            "router",
+            route_after_router,
+            {
+                "architect": "architect",
+                "query_rewriter": "query_rewriter",
+                "graph": "graph",
+            },
+        )
+
+        workflow.add_edge("query_rewriter", "graph")
+        workflow.add_edge("architect", "synthesizer")
+
         def route_after_graph(state: AgentState):
             if state["router_decision"] == "graph":
                 graph_res = state.get("graph_result")
                 if graph_res and self.query_engine._is_meaningful(graph_res):
                     return "synthesizer"
             return "vector"
-            
-        workflow.add_edge("router", "graph")
+
         workflow.add_conditional_edges(
             "graph",
             route_after_graph,
-            {"vector": "vector", "synthesizer": "synthesizer"}
+            {"vector": "vector", "synthesizer": "synthesizer"},
         )
         workflow.add_edge("vector", "synthesizer")
         workflow.add_edge("synthesizer", END)
-        
+
         return workflow.compile()

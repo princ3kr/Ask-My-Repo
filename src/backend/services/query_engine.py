@@ -8,9 +8,9 @@ from fuzzywuzzy import process, fuzz
 from qdrant_client.models import Filter, FieldCondition, MatchAny
 
 VALID_FILE_PROPERTIES = {
-    'name', 'path', 'functions', 'classes', 'imports', 'repo_id', 
-    'qualified_name', 'class_name', 'bases', 'module', 'alias', 'line', 
-    'line_start', 'line_end'
+    'name', 'path', 'functions', 'classes', 'imports', 'repo_id',
+    'qualified_name', 'class_name', 'bases', 'module', 'alias', 'line',
+    'line_start', 'line_end', 'is_entry', 'entry_kind', 'entry_confidence',
 }
 
 class CypherQuery(BaseModel):
@@ -22,6 +22,14 @@ class RouterDecision(BaseModel):
         description="graph_only ONLY for pure structural/dependency/topology questions. hybrid for everything else."
     )
     reason: str = Field(default="Routed by QueryEngine", description="Brief explanation of the routing decision")
+
+
+class ArchitectSubtype(BaseModel):
+    subtype: Literal['request_flow', 'system_overview', 'dependency_map', 'class_interaction', 'entry_call_chain'] = Field(
+        ...,
+        description="Architecture question subtype for deep graph traversal"
+    )
+    reason: str = Field(default="", description="Why this subtype was chosen")
 
 class QueryEngine:
     def __init__(self, repo_id: str, db_client, uri: str = None, user: str = None, password: str = None, llm = None):
@@ -41,8 +49,63 @@ class QueryEngine:
         self._router_cache: dict[str, RouterDecision] = {}
         self._graph_cache: dict[str, dict | None] = {}
         self.query_templates = self._init_templates()
+        self.architect_templates = self._init_architect_templates()
         self.min_result_count = 1  # Minimum files expected for scoped search
         self.max_result_variance = 0.5  # Flag if results seem incomplete
+
+    def _init_architect_templates(self) -> dict:
+        """Deep multi-hop Cypher templates for architecture questions."""
+        return {
+            "entry_call_chain": """
+                MATCH (entry:Function {repo_id: $repo_id})
+                WHERE entry.is_entry = true
+                MATCH path = (entry)-[:CALLS*1..6]->(downstream:Function)
+                WHERE downstream.repo_id = $repo_id
+                RETURN entry.qualified_name as entry_point,
+                       entry.entry_kind as kind,
+                       [n in nodes(path) | n.qualified_name] as call_chain,
+                       length(path) as depth
+                ORDER BY depth DESC LIMIT 15
+            """,
+            "request_flow": """
+                MATCH (entry:Function {repo_id: $repo_id})
+                WHERE entry.is_entry = true
+                  AND entry.entry_kind IN ['http_endpoint', 'app_runner']
+                MATCH path = (entry)-[:CALLS*1..6]->(sink:Function)
+                WHERE sink.repo_id = $repo_id
+                  AND (NOT (sink)-[:CALLS]->() OR (sink)-[:CALLS_EXTERNAL]->())
+                RETURN [n in nodes(path) | n.qualified_name] as flow,
+                       length(path) as depth
+                ORDER BY depth DESC LIMIT 10
+            """,
+            "dependency_map": """
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                MATCH path = (f)-[:IMPORTS*1..4]->(dep:File)
+                WHERE dep.repo_id = $repo_id
+                RETURN f.path as source,
+                       [n in nodes(path) | n.path] as dependency_chain
+                ORDER BY length(path) DESC LIMIT 30
+            """,
+            "class_interaction": """
+                MATCH (c1:Class {repo_id: $repo_id})-[:HAS_METHOD]->(m:Function)
+                MATCH (m)-[:CALLS|INSTANTIATES]->(target)
+                MATCH (c2:Class {repo_id: $repo_id})-[:HAS_METHOD]->(target)
+                WHERE c1 <> c2
+                RETURN c1.name as from_class, m.name as via_method,
+                       c2.name as to_class
+                ORDER BY from_class
+            """,
+            "system_overview": """
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                OPTIONAL MATCH (f)-[:DEFINES_FUNCTION]->(fn:Function)
+                OPTIONAL MATCH (f)-[:DEFINES_CLASS]->(c:Class)
+                RETURN f.path as file,
+                       collect(DISTINCT fn.name) as functions,
+                       collect(DISTINCT c.name) as classes,
+                       collect(DISTINCT CASE WHEN fn.is_entry THEN fn.entry_kind END) as entry_kinds
+                ORDER BY f.path
+            """,
+        }
 
     def _init_templates(self) -> dict:
         """Initialize Cypher query templates for common patterns"""
@@ -197,6 +260,105 @@ class QueryEngine:
             })
         
         return None
+
+    def _classify_architect_subtype(self, query: str) -> str:
+        """Classify architecture question subtype via regex heuristics + LLM fallback."""
+        q = query.lower()
+        if any(kw in q for kw in ("request flow", "end-to-end", "api to", "trace the call", "call chain", "from api")):
+            return "request_flow"
+        if any(kw in q for kw in ("dependency map", "module depend", "how do modules", "import chain")):
+            return "dependency_map"
+        if any(kw in q for kw in ("class interact", "between classes", "cross-class")):
+            return "class_interaction"
+        if any(kw in q for kw in ("entry point", "main entry", "call chain from entry", "bootstrapping")):
+            return "entry_call_chain"
+        if any(kw in q for kw in ("overview", "architecture", "system", "components connected", "how are components")):
+            return "system_overview"
+
+        if self.llm:
+            try:
+                classifier = self.llm.with_structured_output(ArchitectSubtype)
+                result: ArchitectSubtype = classifier.invoke([
+                    ("system", "Classify the architecture question subtype."),
+                    ("user", query),
+                ])
+                return result.subtype
+            except Exception:
+                pass
+        return "system_overview"
+
+    def _execute_architect_template(self, template_name: str) -> dict | None:
+        try:
+            cypher = self.architect_templates[template_name]
+            with self.graph_driver.session() as session:
+                result = session.run(cypher, repo_id=self.repo_id)
+                data = [record.data() for record in result]
+            return {
+                "is_fallback": False,
+                "data": data,
+                "response": cypher,
+                "method": "architect",
+                "template_name": template_name,
+                "timestamp": time.time(),
+            }
+        except Exception as e:
+            print(f"[Architect Template Error] {template_name}: {e}")
+            return None
+
+    def architect_search(self, query: str) -> dict | None:
+        """Run deep graph traversal for architecture questions."""
+        subtype = self._classify_architect_subtype(query)
+
+        template_map = {
+            "request_flow": ["request_flow", "entry_call_chain"],
+            "system_overview": ["system_overview", "entry_call_chain"],
+            "dependency_map": ["dependency_map"],
+            "class_interaction": ["class_interaction"],
+            "entry_call_chain": ["entry_call_chain", "request_flow"],
+        }
+        templates = template_map.get(subtype, ["system_overview"])
+
+        combined_data = []
+        used_templates = []
+        for tpl in templates[:2]:
+            result = self._execute_architect_template(tpl)
+            if result and result.get("data"):
+                combined_data.extend(result["data"])
+                used_templates.append(tpl)
+
+        if not combined_data:
+            return None
+
+        return {
+            "is_fallback": False,
+            "data": combined_data,
+            "method": "architect",
+            "subtype": subtype,
+            "templates": used_templates,
+            "timestamp": time.time(),
+        }
+
+    def extract_critical_path_files(self, architect_result: dict, limit: int = 4) -> list[str]:
+        """Extract top file paths from architect traversal for optional vector enrichment."""
+        paths: list[str] = []
+        for record in architect_result.get("data", []):
+            for key, val in record.items():
+                if isinstance(val, str) and (val.endswith(".py") or "/" in val):
+                    paths.append(val)
+                elif isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, str):
+                            if item.endswith(".py") or "::" in item:
+                                fn_path = item.split("::")[0] if "::" in item else item
+                                if fn_path.endswith(".py"):
+                                    paths.append(fn_path)
+        seen = set()
+        unique = []
+        for p in paths:
+            if p not in seen:
+                seen.add(p)
+                unique.append(p)
+        return unique[:limit]
 
     def _execute_template(self, template_name: str, params: dict) -> dict | None:
         """Execute a template query safely"""

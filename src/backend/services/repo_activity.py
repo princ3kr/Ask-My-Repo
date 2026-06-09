@@ -120,13 +120,29 @@ class RepoActivityTracker:
             print(f"[Cleanup Error] Failed to delete Qdrant collection for {repo_id}: {e}")
             return False
 
-    def cleanup_repo(self, repo_id: str) -> bool:
-        """Clean up both Neo4j and Qdrant for an inactive repo with exponential backoff."""
+    def _wipe_session_stores(self, repo_id: str, engine_cache: dict | None, history_store: dict | None) -> None:
+        """Remove all session-scoped cache entries for a repo."""
+        prefix = f"{repo_id}:"
+        if engine_cache is not None:
+            for key in [k for k in engine_cache if k.startswith(prefix)]:
+                del engine_cache[key]
+        if history_store is not None:
+            for key in [k for k in history_store if k.startswith(prefix)]:
+                del history_store[key]
+
+    def cleanup_repo(
+        self,
+        repo_id: str,
+        engine_cache: dict | None = None,
+        history_store: dict | None = None,
+    ) -> bool:
+        """Clean up Neo4j, Qdrant, and optional session caches for an inactive repo."""
         print(f"[Cleanup] Starting cleanup for inactive repo '{repo_id}'...")
-        
-        # Track failure count for exponential backoff
+
+        self._wipe_session_stores(repo_id, engine_cache, history_store)
+
         failure_count = self.failed_cleanups.get(repo_id, 0)
-        
+
         neo4j_ok = self.cleanup_neo4j_repo(repo_id)
         qdrant_ok = self.cleanup_qdrant_collection(repo_id)
         
@@ -159,7 +175,11 @@ class RepoActivityTracker:
                 
                 if repo_to_cleanup:
                     print(f"[Cleanup] Found inactive repo: {repo_to_cleanup}")
-                    self.cleanup_repo(repo_to_cleanup)
+                    self.cleanup_repo(
+                        repo_to_cleanup,
+                        engine_cache=getattr(self, "_engine_cache", None),
+                        history_store=getattr(self, "_history_store", None),
+                    )
                 else:
                     with self.lock:
                         active_count = len(self.activity_log)
@@ -172,12 +192,18 @@ class RepoActivityTracker:
                 print(f"[Cleanup Thread Error] {e}")
                 time.sleep(CLEANUP_CHECK_INTERVAL_MINUTES * 60)
 
-    def start_cleanup_task(self) -> None:
+    def start_cleanup_task(
+        self,
+        engine_cache: dict | None = None,
+        history_store: dict | None = None,
+    ) -> None:
         """Start the background cleanup thread."""
         if self.running:
             print("[Cleanup] Cleanup task already running.")
             return
 
+        self._engine_cache = engine_cache
+        self._history_store = history_store
         self.running = True
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()

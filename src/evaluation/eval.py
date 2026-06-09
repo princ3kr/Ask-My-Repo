@@ -41,16 +41,20 @@ engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
 def process_sample(sample):
     initial_state = {
         "repo_id": repo_id,
+        "session_id": "eval",
         "current_agent": "router",
         "router_decision": "hybrid",
         "reason": "",
+        "context": "",
         "plan": [],
         "user_query": sample['question'],
+        "rewritten_query": "",
         "user_history": [],
         "cypher_query": "",
         "graph_result": None,
         "vector_result": [],
-        "final_answer": ""
+        "architect_subtype": "",
+        "final_answer": "",
     }
     
     max_retries = 3

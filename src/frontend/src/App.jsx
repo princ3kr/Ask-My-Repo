@@ -8,6 +8,16 @@ import InteractiveBackground from './components/InteractiveBackground';
 import BrandLogo, { PRODUCT_NAME } from './components/BrandLogo';
 
 const API_URL = '/api';
+const SESSION_STORAGE_KEY = 'ask_my_repo_session_id';
+
+const getOrCreateSessionId = () => {
+    let id = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!id) {
+        id = crypto.randomUUID();
+        localStorage.setItem(SESSION_STORAGE_KEY, id);
+    }
+    return id;
+};
 
 const INDEX_STAGES = [
     { id: 'fetching', label: 'Download' },
@@ -178,6 +188,10 @@ const App = () => {
     const [isTyping, setIsTyping] = useState(false);
     const [expandedReason, setExpandedReason] = useState({});
     const [showSuggestions, setShowSuggestions] = useState(false);
+    const [sessionId, setSessionId] = useState(() => getOrCreateSessionId());
+    const [repoId, setRepoId] = useState('');
+    const [graphOpen, setGraphOpen] = useState(false);
+    const [graphHtml, setGraphHtml] = useState(null);
     const messagesEndRef = useRef(null);
     const pollRef = useRef(null);
     const cardGlow = useCardGlow();
@@ -256,6 +270,7 @@ const App = () => {
             const result = await pollJobStatus(data.job_id);
 
             setIsParsed(true);
+            setRepoId(result.repo_id || '');
             setStats({
                 files: result.files_count || 0,
                 nodes: result.nodes_count || 0,
@@ -268,6 +283,19 @@ const App = () => {
                 role: 'assistant',
                 content: `Done! I've learned ${result.files_count} files across ${result.nodes_count} connected parts. Pick a suggestion below or ask anything.`,
             });
+            // Fetch graph HTML once and cache it
+            try {
+                if (result.repo_id && !graphHtml) {
+                    const r = await fetch(`${API_URL}/graph/${result.repo_id}`);
+                    if (r.ok) {
+                        const html = await r.text();
+                        setGraphHtml(html);
+                    }
+                }
+            } catch (e) {
+                // ignore graph fetch failures (optional)
+                console.warn('Graph fetch failed', e);
+            }
         } catch (e) {
             setJobProgress((prev) => ({
                 ...prev,
@@ -284,8 +312,40 @@ const App = () => {
         }
     };
 
+    const toggleGraph = () => setGraphOpen((s) => !s);
+
+    const handleDeleteRepo = async () => {
+        if (!repoId) return;
+        const ok = window.confirm('This will delete all indexed data for this repo. You will need to re-index to use it again. Proceed?');
+        if (!ok) return;
+
+        try {
+            const res = await fetch(`${API_URL}/cleanup/manual/${repoId}`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Delete failed');
+
+            // Clear cached UI state
+            setGraphHtml(null);
+            setGraphOpen(false);
+            setIsParsed(false);
+            setRepoUrl('');
+            setMessages([{
+                id: Date.now(),
+                role: 'assistant',
+                content: 'Repository cleared. Connect a repo to get started.',
+            }]);
+            setSessionId(crypto.randomUUID());
+            localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+        } catch (e) {
+            window.alert(e.message || 'Failed to delete repo');
+        }
+    };
+
     const handleNewSession = () => {
         if (pollRef.current) clearInterval(pollRef.current);
+        const newSessionId = crypto.randomUUID();
+        localStorage.setItem(SESSION_STORAGE_KEY, newSessionId);
+        setSessionId(newSessionId);
         setRepoUrl('');
         setIsParsing(false);
         setIsParsed(false);
@@ -300,12 +360,6 @@ const App = () => {
         setInput('');
         setExpandedReason({});
     };
-
-    const buildHistory = (currentMessages) =>
-        currentMessages
-            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.isStatus)
-            .slice(-8)
-            .map((m) => ({ role: m.role, content: m.content }));
 
     const handleSend = async (textOverride) => {
         const query = (textOverride ?? input).trim();
@@ -324,7 +378,7 @@ const App = () => {
                 body: JSON.stringify({
                     repo_url: normalizeRepoUrl(repoUrl),
                     query,
-                    history: buildHistory([...messages, newUserMsg]),
+                    session_id: sessionId,
                 }),
             });
             const data = await res.json();
@@ -417,7 +471,7 @@ const App = () => {
                     </div>
                 </header>
 
-                <main className="flex-1 overflow-y-auto overscroll-contain px-3 pb-48 pt-3 sm:px-4 md:px-6 md:pb-44 md:pt-4">
+                <main className="flex-1 overflow-y-auto overscroll-contain px-3 pb-48 pt-3 sm:px-4 md:px-6 md:pb-44 md:pt-4" style={{ marginRight: graphOpen ? '35%' : undefined }}>
                     <div className="mx-auto max-w-3xl space-y-5 sm:space-y-6">
                         {showSetup && (
                             <>
@@ -559,6 +613,39 @@ const App = () => {
                         <div ref={messagesEndRef} />
                     </div>
                 </main>
+
+                {/* Sliding graph panel */}
+                <div
+                    className="graph-panel fixed top-16 right-0 h-[calc(100%-4rem)] sm:w-[35%] w-full max-w-[900px] bg-[#071022] shadow-2xl transform transition-transform duration-300 z-20"
+                    style={{ transform: graphOpen ? 'translateX(0)' : 'translateX(100%)' }}
+                >
+                    <div className="flex items-center justify-between border-b border-white/5 p-3">
+                        <div className="flex items-center gap-2">
+                            <Network size={16} />
+                            <strong className="truncate">{repoShortName(repoUrl) || 'Repository graph'}</strong>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={handleDeleteRepo} className="btn-ghost text-sm">Delete</button>
+                            <button onClick={toggleGraph} className="btn-ghost">Close</button>
+                        </div>
+                    </div>
+                    <div className="h-[calc(100%-56px)]">
+                        {graphHtml ? (
+                            <iframe title="repo-graph" srcDoc={graphHtml} style={{ width: '100%', height: '100%', border: 0 }} />
+                        ) : (
+                            <div className="flex h-full items-center justify-center text-white/50">Graph not available</div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Toggle button always visible on right edge */}
+                <button
+                    aria-label="Toggle graph panel"
+                    onClick={toggleGraph}
+                    className="fixed right-2 top-1/2 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white/5 shadow-lg"
+                >
+                    <Network size={16} />
+                </button>
 
                 <footer className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#050508] via-[#050508]/95 to-transparent px-3 pb-4 pt-16 sm:px-4 sm:pb-5 sm:pt-20 md:px-6">
                     <div className="pointer-events-auto mx-auto max-w-3xl">

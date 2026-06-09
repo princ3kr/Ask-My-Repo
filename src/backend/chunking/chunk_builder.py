@@ -210,12 +210,32 @@ class ChunkBuilder:
                                 MATCH (f:File {path: $path, repo_id: $repo_id})
                                 MERGE (fn:Function {qualified_name: $qualified_name, repo_id: $repo_id})
                                 SET fn.name = $name, fn.path = $path, fn.class_name = $class_name,
-                                    fn.line_start = $line_start, fn.line_end = $line_end
+                                    fn.line_start = $line_start, fn.line_end = $line_end,
+                                    fn.is_entry = false, fn.entry_kind = null, fn.entry_confidence = null
                                 WITH f, fn
                                 OPTIONAL MATCH (c:Class {name: $class_name, path: $path, repo_id: $repo_id})
                                 FOREACH (_ IN CASE WHEN c IS NULL THEN [1] ELSE [] END | MERGE (f)-[:DEFINES_FUNCTION]->(fn))
                                 FOREACH (_ IN CASE WHEN c IS NULL THEN [] ELSE [1] END | MERGE (c)-[:HAS_METHOD]->(fn))
                             ''', repo_id=repo_id, path=path, **fn)
+
+                        for ep in data.get("entry_points", []):
+                            qname = ep.get("qualified_name")
+                            kind = ep.get("kind")
+                            if not qname or kind in ("main_block", "app_runner"):
+                                continue
+                            tx.run('''
+                                MATCH (fn:Function {qualified_name: $qname, repo_id: $repo_id})
+                                SET fn.is_entry = true,
+                                    fn.entry_kind = $kind,
+                                    fn.entry_confidence = $confidence
+                            ''', repo_id=repo_id, qname=qname, kind=kind,
+                                 confidence=ep.get("confidence", 0.9))
+
+                        if data.get("entry_points"):
+                            tx.run('''
+                                MATCH (f:File {path: $path, repo_id: $repo_id})
+                                SET f.is_entry = true
+                            ''', repo_id=repo_id, path=path)
 
                         for imp in data.get("imports", []):
                             tx.run('''
@@ -270,8 +290,53 @@ class ChunkBuilder:
                                 ''', repo_id=repo_id, caller=call["caller"], callee=target, line=call["line"])
         finally:
             driver.close()
-                
-    def show(self, filename="graph.html"):
+
+    @staticmethod
+    def apply_entry_points(repo_id: str, entry_points: list[dict]) -> None:
+        """Apply merged entry point results (AST + LLM) to existing Neo4j graph."""
+        driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
+        try:
+            with driver.session() as session:
+                with session.begin_transaction() as tx:
+                    for ep in entry_points:
+                        if not ep.get("is_entry", True):
+                            continue
+                        path = ep.get("path")
+                        qname = ep.get("qualified_name")
+                        kind = ep.get("kind")
+                        confidence = ep.get("confidence", 0.8)
+
+                        if qname and kind != "main_block":
+                            tx.run('''
+                                MATCH (fn:Function {qualified_name: $qname, repo_id: $repo_id})
+                                SET fn.is_entry = true,
+                                    fn.entry_kind = $kind,
+                                    fn.entry_confidence = $confidence
+                            ''', repo_id=repo_id, qname=qname, kind=kind, confidence=confidence)
+
+                        if path:
+                            tx.run('''
+                                MATCH (f:File {path: $path, repo_id: $repo_id})
+                                SET f.is_entry = true
+                            ''', repo_id=repo_id, path=path)
+        finally:
+            driver.close()
+
+    def show(self, filename=None):
+        # Ensure notebook dir exists and default filename is per-repo
+        notebook_dir = os.path.join(os.getcwd(), "notebook")
+        try:
+            os.makedirs(notebook_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        # Default to a per-repo filename when not provided
+        if not filename:
+            filename = os.path.join(notebook_dir, f"{self.repo_id}_graph.html")
+        elif not os.path.isabs(filename) and not filename.startswith("notebook"):
+            # treat relative filename as inside notebook/
+            filename = os.path.join(notebook_dir, filename)
+
         net = Network(
             directed=True, notebook=True, cdn_resources='remote', 
             height="750px", width="100%", bgcolor="#111827", font_color="white"
@@ -283,4 +348,6 @@ class ChunkBuilder:
             "interaction": {"hover": True, "navigationButtons": True, "multiselect": True, "tooltipDelay": 200}
         }
         net.set_options(json.dumps(options))
-        return net.write_html(filename)
+        # Write the pyvis HTML to the chosen file and return the path
+        net.write_html(filename)
+        return filename
