@@ -4,18 +4,51 @@
 
 @layer base {
     :root {
-        --bg-color: #0a0b0e;
+        --bg-color: #080c16;
+        --panel-color: #0b1120;
+        --surface-color: #0f1629;
+        --surface-muted-color: #18203a;
         --accent-color: #8b5cf6;
+        --accent-hover: #a78bfa;
         --accent-purple: #6d28d9;
+        --text-dim: #8892a8;
+        --text-color: #c9d1d9;
+        --text-muted: rgba(201, 217, 217, 0.5);
+        --text-subtle: rgba(201, 217, 217, 0.25);
+        --card-bg: rgba(255, 255, 255, 0.03);
+        --card-border: rgba(255, 255, 255, 0.06);
+        --input-bg: rgba(0, 0, 0, 0.25);
+        --grain-opacity: 0.025;
         --mouse-x: 50%;
         --mouse-y: 50%;
         --spotlight-opacity: 0.35;
         --grain-url: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
     }
 
+    .light-theme {
+        --bg-color: #f8f9fa;
+        --panel-color: #ffffff;
+        --surface-color: #f0f2f5;
+        --surface-muted-color: #e0e3e8;
+        --accent-color: #7c3aed;
+        --accent-hover: #6d28d9;
+        --accent-purple: #5b21b6;
+        --text-dim: #6b7280;
+        --text-color: #1f2937;
+        --text-muted: rgba(31, 41, 55, 0.55);
+        --text-subtle: rgba(31, 41, 55, 0.3);
+        --card-bg: rgba(0, 0, 0, 0.02);
+        --card-border: rgba(0, 0, 0, 0.08);
+        --input-bg: rgba(0, 0, 0, 0.04);
+        --grain-opacity: 0.01;
+    }
+
     body {
         background-color: var(--bg-color);
-        color: #c9d1d9;
+        background-image:
+            radial-gradient(ellipse 80% 60% at 50% 0%, rgba(139,92,246,0.03) 0%, transparent 60%),
+            radial-gradient(ellipse 60% 50% at 80% 100%, rgba(59,130,246,0.02) 0%, transparent 50%);
+        color: var(--text-color);
         overflow: hidden;
         margin: 0;
         height: 100vh;
@@ -24,9 +57,25 @@
         -moz-osx-font-smoothing: grayscale;
     }
 
+    .light-theme body,
+    .light-theme {
+        background-image: none;
+    }
+
+    .light-theme .text-white,
+    .light-theme .text-gray-200,
+    .light-theme .text-gray-300 {
+        color: var(--text-color);
+    }
+
+    .light-theme button.hover\:text-white:hover,
+    .light-theme .hover\:text-white:hover {
+        color: var(--accent-color);
+    }
+
     * {
         scrollbar-width: thin;
-        scrollbar-color: #30363d transparent;
+        scrollbar-color: var(--surface-muted-color) transparent;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -53,7 +102,7 @@
         position: relative;
         overflow: hidden;
         border-radius: 0.65rem;
-        background: linear-gradient(135deg, var(--accent-color), #7c3aed);
+        background: linear-gradient(135deg, var(--accent-color), var(--accent-purple));
         color: white;
         font-weight: 500;
         transition: transform 0.2s, box-shadow 0.2s;
@@ -70,7 +119,7 @@
 
     .btn-primary:hover:not(:disabled) {
         transform: translateY(-1px);
-        box-shadow: 0 8px 28px -4px rgba(139, 92, 246, 0.35);
+        box-shadow: 0 8px 28px -4px color-mix(in srgb, var(--accent-color) 35%, transparent);
     }
 
     .btn-primary:hover:not(:disabled)::after {
@@ -87,12 +136,12 @@
 
     /* ── Tree / Explorer ── */
     .tree-item {
-        @apply flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer rounded-md hover:bg-surface-muted text-text-dim hover:text-gray-200 transition-all duration-150;
+        @apply flex items-center gap-1.5 px-2 py-1 text-xs cursor-pointer rounded-md hover:bg-surface-muted text-text-dim hover:text-[var(--text-color)] transition-all duration-150;
         min-height: 26px;
     }
 
     .tree-item:hover {
-        background: rgba(255,255,255,0.04);
+        background: rgba(139, 92, 246, 0.06);
     }
 
     .stat-card {
@@ -104,23 +153,23 @@
         display: inline-flex;
         align-items: center;
         max-width: 100%;
-        padding: 0.4rem 0.7rem;
+        padding: 0.5rem 0.9rem;
         border-radius: 999px;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        background: rgba(255, 255, 255, 0.02);
-        font-size: 0.7rem;
-        color: rgba(255, 255, 255, 0.5);
+        border: 1px solid color-mix(in srgb, var(--accent-color) 12%, transparent);
+        background: color-mix(in srgb, var(--accent-color) 4%, transparent);
+        font-size: 0.8rem;
+        color: var(--text-dim);
         cursor: pointer;
         transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         text-align: left;
     }
 
     .suggestion-chip:hover {
-        border-color: rgba(139, 92, 246, 0.3);
-        background: rgba(139, 92, 246, 0.06);
-        color: white;
+        border-color: color-mix(in srgb, var(--accent-color) 30%, transparent);
+        background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+        color: var(--text-color);
         transform: translateY(-1px);
-        box-shadow: 0 4px 20px -4px rgba(139, 92, 246, 0.15);
+        box-shadow: 0 4px 20px -4px color-mix(in srgb, var(--accent-color) 15%, transparent);
     }
 
     /* ── Chat Bubbles ── */
@@ -131,21 +180,21 @@
     }
 
     .chat-bubble-assistant {
-        background: rgba(255, 255, 255, 0.03);
+        background: color-mix(in srgb, var(--accent-color) 4%, transparent);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        color: rgba(255, 255, 255, 0.82);
+        border: 1px solid color-mix(in srgb, var(--accent-color) 10%, transparent);
+        color: var(--text-color);
     }
 
     /* ── Progress ── */
     .progress-panel {
         position: relative;
         overflow: hidden;
-        background: rgba(255, 255, 255, 0.03);
+        background: color-mix(in srgb, var(--accent-color) 4%, transparent);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
+        border: 1px solid color-mix(in srgb, var(--accent-color) 10%, transparent);
         border-radius: 1rem;
         padding: 1rem;
         box-shadow: 0 16px 40px -12px rgba(0, 0, 0, 0.45);
@@ -155,6 +204,16 @@
         animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
         opacity: 0;
         transform: translateY(10px);
+    }
+
+    /* ── Grain overlay ── */
+    .grain-overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 9999;
+        opacity: var(--grain-opacity);
+        background-image: var(--grain-url);
     }
 }
 
@@ -169,12 +228,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.07);
+    background: color-mix(in srgb, var(--accent-color) 12%, transparent);
     border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: color-mix(in srgb, var(--accent-color) 25%, transparent);
 }
 
 /* ── React Flow Overrides ── */
@@ -186,8 +245,8 @@
 .react-flow__handle {
     width: 8px !important;
     height: 8px !important;
-    background: #8b949e !important;
-    border: 2px solid #0d1117 !important;
+    background: var(--text-dim) !important;
+    border: 2px solid var(--bg-color) !important;
     transition: all 0.2s;
 }
 
@@ -206,7 +265,10 @@
 }
 
 .react-flow__background {
-    background-color: #0a0b0e !important;
+    background-color: var(--bg-color) !important;
+    background-image:
+        radial-gradient(ellipse at 30% 20%, color-mix(in srgb, var(--accent-color) 4%, transparent) 0%, transparent 50%),
+        radial-gradient(ellipse at 70% 80%, rgba(59,130,246,0.02) 0%, transparent 50%) !important;
 }
 
 /* MiniMap styles */
@@ -228,10 +290,10 @@
 .react-flow__controls-button {
     width: 28px !important;
     height: 28px !important;
-    background: #1c2128 !important;
+    background: var(--panel-color) !important;
     border: none !important;
-    border-bottom: 1px solid #22272e !important;
-    color: #8b949e !important;
+    border-bottom: 1px solid var(--surface-muted-color) !important;
+    color: var(--text-dim) !important;
     cursor: pointer !important;
     display: flex !important;
     align-items: center !important;
@@ -240,8 +302,8 @@
 }
 
 .react-flow__controls-button:hover {
-    background: #22272e !important;
-    color: #c9d1d9 !important;
+    background: var(--surface-color) !important;
+    color: var(--text-color) !important;
 }
 
 .react-flow__controls-button svg {
@@ -260,7 +322,11 @@
     50% { opacity: 0.6; transform: scale(0.85); }
 }
 
-/* ── Resizable handle ── */
+/* ── Resizable handles ── */
 .cursor-col-resize {
     cursor: col-resize;
+}
+
+.cursor-row-resize {
+    cursor: row-resize;
 }

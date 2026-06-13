@@ -27,7 +27,7 @@ export default function NodeDetails({ node, graphData }) {
     const findNodeById = (id) => graphData?.nodes?.find(n => n.id === id);
 
     return (
-        <div className="border-t border-surface-muted bg-panel shrink-0 flex flex-col z-10">
+        <div className="flex flex-col h-full bg-panel">
             {/* Tab bar */}
             <div className="flex items-center border-b border-surface-muted bg-panel">
                 {TABS.map(tab => (
@@ -49,7 +49,7 @@ export default function NodeDetails({ node, graphData }) {
                 ))}
             </div>
 
-            <div className="flex-1 overflow-y-auto" style={{ maxHeight: '220px' }}>
+            <div className="flex-1 overflow-y-auto">
                 {activeTab === 'Properties' && (
                     <div className="p-3 space-y-3">
                         {/* Header */}

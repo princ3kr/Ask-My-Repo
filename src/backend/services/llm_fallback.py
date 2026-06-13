@@ -6,6 +6,9 @@ import logging
 import traceback
 import sys
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger('askmyrepo.llm')
 
@@ -71,7 +74,9 @@ class FallbackChatModel:
         self._last_error = None
 
     def with_structured_output(self, schema, **kwargs):
-        return FallbackStructuredOutput(self, schema, kwargs)
+        from langchain_core.runnables import RunnableLambda
+        inner = FallbackStructuredOutput(self, schema, kwargs)
+        return RunnableLambda(inner.invoke)
 
     @property
     def model_name(self):
@@ -106,14 +111,18 @@ class FallbackChatModel:
                     logger.error(f"[GROQ ALSO FAILED] {type(e2).__name__}: {e2}")
                     for line in traceback.format_exc().splitlines():
                         logger.error(f"  {line}")
-                    raise
+                    raise RuntimeError(
+                        "Both LLM providers failed. "
+                        f"OpenAI ({type(e).__name__}): {e} | "
+                        f"Groq ({type(e2).__name__}): {e2}"
+                    ) from e2
             else:
                 logger.info("[FALLBACK SKIPPED] Error is not an OpenAI API failure — re-raising.")
                 raise
 
     def __getattr__(self, name):
         """Delegate any unimplemented attributes to the active LLM."""
-        if name in ('_fallback_used', '_last_error', 'openai', 'groq', 'with_structured_output', 'invoke', '_invoke_with_fallback'):
+        if name in ('_fallback_used', '_last_error', 'openai', 'groq', 'with_structured_output', 'invoke', '_invoke_with_fallback', 'load_dotenv'):
             raise AttributeError(name)
         return getattr(self.groq if self._fallback_used else self.openai, name)
 
@@ -155,7 +164,11 @@ class FallbackStructuredOutput:
                     logger.error(f"[GROQ STRUCTURED ALSO FAILED] {type(e2).__name__}: {e2}")
                     for line in traceback.format_exc().splitlines():
                         logger.error(f"  {line}")
-                    raise
+                    raise RuntimeError(
+                        "Both LLM providers failed. "
+                        f"OpenAI ({type(e).__name__}): {e} | "
+                        f"Groq ({type(e2).__name__}): {e2}"
+                    ) from e2
             else:
                 logger.info("[FALLBACK SKIPPED] Error is not an OpenAI API failure — re-raising.")
                 raise

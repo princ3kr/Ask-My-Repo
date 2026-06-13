@@ -1,7 +1,7 @@
 @layer base {
   body {
-    background-color: theme('colors.background');
-    color: #c9d1d9;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     overflow: hidden;
     margin: 0;
     height: 100vh;
@@ -20,7 +20,7 @@
     }
     
     .btn-ghost {
-        @apply text-text-dim hover:text-white hover:bg-surface-muted px-2 py-1.5 rounded-md transition-colors text-sm flex items-center gap-2;
+        @apply text-text-dim hover:text-[var(--text-color)] hover:bg-surface-muted px-2 py-1.5 rounded-md transition-colors text-sm flex items-center gap-2;
     }
     
     .btn-primary {
@@ -36,7 +36,7 @@
     }
     
     .tree-item {
-        @apply flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer rounded-md hover:bg-surface-muted text-text-dim hover:text-gray-200 transition-colors;
+        @apply flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer rounded-md hover:bg-surface-muted text-text-dim hover:text-[var(--text-color)] transition-colors;
     }
     
     .stat-card {
@@ -44,7 +44,7 @@
     }
     
     .suggestion-chip {
-        @apply text-xs text-text-dim border border-surface-muted bg-surface rounded-md px-3 py-2 text-left hover:border-accent/50 hover:text-gray-200 transition-colors w-full;
+        @apply text-xs text-text-dim border border-surface-muted bg-surface rounded-md px-3 py-2 text-left hover:border-accent/50 hover:text-[var(--text-color)] transition-colors w-full;
     }
 }
 
@@ -56,12 +56,12 @@
 .react-flow__handle {
     width: 6px;
     height: 6px;
-    background: #8b949e;
+    background: var(--text-dim);
     border: none;
 }
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #8b949e; }
+::-webkit-scrollbar-thumb { background: var(--surface-muted-color); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }

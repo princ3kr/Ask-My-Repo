@@ -104,6 +104,7 @@ async def log_requests(request: Request, call_next):
 
 active_engines: Dict[str, ChatWorkflow] = {}
 session_histories: Dict[str, List[Dict[str, str]]] = {}
+repo_files_cache: Dict[str, dict] = {}
 MAX_HISTORY_TURNS = 16
 
 
@@ -157,7 +158,14 @@ def _get_or_create_engine(repo_id: str, session_id: str, repo_url: str) -> ChatW
         return active_engines[key]
 
     engine_logger.info(f"Creating new engine: {key}")
-    files = get_files(repo_url)
+
+    if repo_id not in repo_files_cache:
+        engine_logger.info(f"Fetching/parsing files for repo: {repo_id}")
+        repo_files_cache[repo_id] = get_files(repo_url)
+    else:
+        engine_logger.debug(f"Using cached files for repo: {repo_id}")
+
+    files = repo_files_cache[repo_id]
     llm = FallbackChatModel()
     engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
     active_engines[key] = engine
@@ -360,6 +368,10 @@ def manual_cleanup(repo_id: str):
     for k in removed_history_keys:
         del session_histories[k]
 
+    if repo_id in repo_files_cache:
+        del repo_files_cache[repo_id]
+        logger.debug(f"Cleared files cache for repo: {repo_id}")
+
     success = activity_tracker.cleanup_repo(
         repo_id,
         engine_cache=active_engines,
@@ -450,7 +462,7 @@ def get_graph_data(repo_id: str):
         with driver.session() as session:
             nodes_query = """
             MATCH (n {repo_id: $repo_id})
-            WHERE ANY(label IN labels(n) WHERE label IN ['File', 'Class', 'Function', 'ExternalSymbol'])
+            WHERE ANY(label IN labels(n) WHERE label IN ['File', 'Class', 'Function'])
             RETURN id(n) as id, labels(n)[0] as type, n
             """
             nodes_res = session.run(nodes_query, repo_id=repo_id)
@@ -473,6 +485,7 @@ def get_graph_data(repo_id: str):
 
             edges_query = """
             MATCH (a {repo_id: $repo_id})-[r]->(b {repo_id: $repo_id})
+            WHERE type(r) IN ['IMPORTS', 'CALLS', 'INHERITS_FROM', 'INSTANTIATES']
             RETURN id(r) as id, id(a) as source, id(b) as target, type(r) as type
             """
             edges_res = session.run(edges_query, repo_id=repo_id)

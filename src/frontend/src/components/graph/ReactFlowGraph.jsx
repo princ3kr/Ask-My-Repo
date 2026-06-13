@@ -12,24 +12,74 @@ import {
 import '@xyflow/react/dist/style.css';
 import { nodeTypes } from './CustomNodes';
 
-function useLayoutedNodes(graphNodes) {
-    return useMemo(() => {
-        if (!graphNodes || graphNodes.length === 0) return [];
-        const cols = Math.ceil(Math.sqrt(graphNodes.length));
-        const spacingX = 280;
-        const spacingY = 200;
-        return graphNodes.map((node, i) => {
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            return {
-                ...node,
-                position: {
-                    x: col * spacingX + (row % 2 === 0 ? 0 : spacingX / 2),
-                    y: row * spacingY,
-                },
-            };
-        });
-    }, [graphNodes]);
+function buildTreeLayout(graphNodes, graphEdges) {
+    if (!graphNodes || graphNodes.length === 0) return [];
+
+    const nodeMap = {};
+    graphNodes.forEach(n => { nodeMap[n.id] = n; });
+
+    const incomingCount = {};
+    const outgoing = {};
+    graphNodes.forEach(n => {
+        incomingCount[n.id] = 0;
+        outgoing[n.id] = [];
+    });
+    graphEdges.forEach(e => {
+        if (incomingCount[e.target] !== undefined) incomingCount[e.target]++;
+        if (outgoing[e.source]) outgoing[e.source].push(e.target);
+    });
+
+    const isEntry = n => n.data?.is_entry === true;
+
+    let roots = graphNodes.filter(n => isEntry(n) || incomingCount[n.id] === 0);
+    if (roots.length === 0) {
+        const minIncoming = Math.min(...graphNodes.map(n => incomingCount[n.id]));
+        roots = graphNodes.filter(n => incomingCount[n.id] === minIncoming);
+    }
+
+    const level = {};
+    const queue = [];
+    roots.forEach(r => {
+        level[r.id] = 0;
+        queue.push(r.id);
+    });
+    while (queue.length > 0) {
+        const id = queue.shift();
+        const currentLevel = level[id];
+        for (const targetId of (outgoing[id] || [])) {
+            const newLevel = currentLevel + 1;
+            if (level[targetId] === undefined || newLevel > level[targetId]) {
+                level[targetId] = newLevel;
+                queue.push(targetId);
+            }
+        }
+    }
+
+    const maxLevel = Math.max(...Object.values(level), 0);
+    const nodesByLevel = {};
+    Object.entries(level).forEach(([id, lvl]) => {
+        if (!nodesByLevel[lvl]) nodesByLevel[lvl] = [];
+        nodesByLevel[lvl].push(id);
+    });
+
+    const spacingX = 300;
+    const spacingY = 220;
+
+    return graphNodes.map(node => {
+        const lvl = level[node.id] ?? 0;
+        const nodesAtLevel = nodesByLevel[lvl] || [];
+        const idx = nodesAtLevel.indexOf(node.id);
+        const totalAtLevel = nodesAtLevel.length;
+        const offsetX = idx - (totalAtLevel - 1) / 2;
+
+        return {
+            ...node,
+            position: {
+                x: offsetX * spacingX,
+                y: lvl * spacingY,
+            },
+        };
+    });
 }
 
 function GraphController({ onNodeClick, selectedNodeId, onReady }) {
@@ -69,7 +119,7 @@ function GraphController({ onNodeClick, selectedNodeId, onReady }) {
 }
 
 const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeClick, selectedNodeId, selectedFilePath }, ref) {
-    const laidOutNodes = useLayoutedNodes(graphData?.nodes);
+    const laidOutNodes = useMemo(() => buildTreeLayout(graphData?.nodes, graphData?.edges), [graphData]);
     const [nodes, setNodes, onNodesChange] = useNodesState(laidOutNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const controllerRef = React.useRef(null);
@@ -81,13 +131,15 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
             const styledEdges = graphData.edges.map(e => {
                 const isImport = e.label === 'IMPORTS';
                 const isCall = e.label === 'CALLS';
-                const isInherits = e.label === 'INHERITS';
-                let color = '#8b949e';
+                const isInherits = e.label === 'INHERITS_FROM';
+                const isInstantiates = e.label === 'INSTANTIATES';
+                let color = '#8892a8';
                 let dash = 'none';
                 let width = 1.5;
                 if (isImport) { color = '#6366f1'; dash = '6,3'; width = 1.2; }
                 if (isCall) { color = '#8b5cf6'; dash = 'none'; width = 1.5; }
                 if (isInherits) { color = '#f59e0b'; dash = 'none'; width = 2; }
+                if (isInstantiates) { color = '#10b981'; dash = '4,2'; width = 1.5; }
 
                 return {
                     ...e,
@@ -100,8 +152,8 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
                         height: 15,
                     },
                     label: e.label,
-                    labelStyle: { fill: '#8b949e', fontSize: 9, fontWeight: 600 },
-                    labelBgStyle: { fill: '#0d1117', fillOpacity: 0.85, rx: 3 },
+                    labelStyle: { fill: '#8892a8', fontSize: 9, fontWeight: 600 },
+                    labelBgStyle: { fill: 'var(--bg-color)', fillOpacity: 0.85, rx: 3 },
                     labelBgPadding: [6, 3],
                     labelBgBorderRadius: 3,
                 };
@@ -134,8 +186,8 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
     }, [ref]);
 
     const defaultEdgeOptions = useMemo(() => ({
-        style: { stroke: '#30363d', strokeWidth: 1 },
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#30363d' },
+        style: { stroke: '#18203a', strokeWidth: 1 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#18203a' },
     }), []);
 
     return (
@@ -157,23 +209,21 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
                     selectedNodeId={selectedNodeId}
                     onReady={onReady}
                 />
-                <Background color="#161b22" gap={28} size={1.5} />
+                <Background color="var(--surface-color)" gap={28} size={1.5} />
                 <Controls
                     className="!bg-panel !border-surface-muted !rounded-lg !shadow-lg"
-                    style={{ button: { borderBottom: '1px solid #22272e', backgroundColor: '#1c2128', color: '#8b949e', fill: '#8b949e' } }}
                 />
                 <MiniMap
                     nodeColor={(n) => {
                         const t = n.data?.nodeType;
-                        if (t === 'File') return '#059669';
-                        if (t === 'Class') return '#2563eb';
+                        if (t === 'File') return '#10b981';
+                        if (t === 'Class') return '#3b82f6';
                         if (t === 'Function') return '#8b5cf6';
-                        if (t === 'Model') return '#d97706';
-                        return '#30363d';
+                        if (t === 'Model') return '#f59e0b';
+                        return 'var(--surface-muted-color)';
                     }}
-                    maskColor="rgba(13,17,23,0.7)"
+                    maskColor="rgba(0,0,0,0.7)"
                     className="!bg-panel !border-surface-muted !rounded-lg"
-                    style={{ background: '#161b22' }}
                 />
             </ReactFlow>
         </div>

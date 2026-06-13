@@ -139,66 +139,76 @@ class ChatWorkflow:
         query = state["user_query"]
         logger.debug(f"[router] Routing query: \"{query[:60]}...\"")
 
-        router_llm = self.llm.with_structured_output(RouterDecision)
-        router_prompt = ChatPromptTemplate.from_messages([
-            ('system', """You are a query router for code repository Q&A.
-                The knowledge graph stores: files, imports, classes, functions, methods, inheritance, call edges, entry points.
-                It has NO knowledge of variable values, runtime state, or full code behavior.
+        try:
+            router_llm = self.llm.with_structured_output(RouterDecision)
+            router_prompt = ChatPromptTemplate.from_messages([
+                ('system', """You are a query router for code repository Q&A.
+                    The knowledge graph stores: files, imports, classes, functions, methods, inheritance, call edges, entry points.
+                    It has NO knowledge of variable values, runtime state, or full code behavior.
 
-                Classify into:
+                    Classify into:
 
-                graph_only — answerable purely from code structure:
-                - which files import X
-                - what does <file> depend on
-                - where is a class/function/method defined
-                - which methods belong to a class
-                - which functions/methods call or instantiate another symbol
-                - which files have no imports
-                - which file has the most dependencies
-                - transitive dependencies of <file>
-                - what files depend on <file> (reverse lookup)
+                    graph_only — answerable purely from code structure:
+                    - which files import X
+                    - what does <file> depend on
+                    - where is a class/function/method defined
+                    - which methods belong to a class
+                    - which functions/methods call or instantiate another symbol
+                    - which files have no imports
+                    - which file has the most dependencies
+                    - transitive dependencies of <file>
+                    - what files depend on <file> (reverse lookup)
 
-                architecture — system-wide structural questions:
-                - how does a request flow through the system
-                - what is the end-to-end architecture
-                - trace the call chain from API to DB
-                - give me a system overview
-                - how are components connected
-                - what are the main entry points and how do they connect
+                    architecture — system-wide structural questions:
+                    - how does a request flow through the system
+                    - what is the end-to-end architecture
+                    - trace the call chain from API to DB
+                    - give me a system overview
+                    - how are components connected
+                    - what are the main entry points and how do they connect
 
-                hybrid — everything else:
-                - what a function/method does internally or returns
-                - what happens when a condition is met
-                - initial / default value of anything
-                - how a feature is implemented
-                - what database / framework / library is used
-                - any question about runtime behavior, state, or logic
+                    hybrid — everything else:
+                    - what a function/method does internally or returns
+                    - what happens when a condition is met
+                    - initial / default value of anything
+                    - how a feature is implemented
+                    - what database / framework / library is used
+                    - any question about runtime behavior, state, or logic
 
-                RULE: Architecture questions ask about flows, overviews, or multi-hop system structure.
-                RULE: If mentioning specific variables/fields or asking about behavior → hybrid.
-                When in doubt, choose hybrid."""),
-            ('user', "query: {query}"),
-        ])
+                    RULE: Architecture questions ask about flows, overviews, or multi-hop system structure.
+                    RULE: If mentioning specific variables/fields or asking about behavior → hybrid.
+                    When in doubt, choose hybrid."""),
+                ('user', "query: {query}"),
+            ])
 
-        decision_chain = router_prompt | router_llm
-        res: RouterDecision = decision_chain.invoke({"query": query})
+            decision_chain = router_prompt | router_llm
+            res: RouterDecision = decision_chain.invoke({"query": query})
 
-        self.query_engine._router_cache[query] = res
+            self.query_engine._router_cache[query] = res
 
-        if res.decision == "architecture":
-            router_decision_val = "architecture"
-        elif res.decision == "graph_only":
-            router_decision_val = "graph"
-        else:
-            router_decision_val = "hybrid"
+            if res.decision == "architecture":
+                router_decision_val = "architecture"
+            elif res.decision == "graph_only":
+                router_decision_val = "graph"
+            else:
+                router_decision_val = "hybrid"
 
-        logger.info(f"[router] -> {router_decision_val} (reason: {res.reason[:80]})")
+            logger.info(f"[router] -> {router_decision_val} (reason: {res.reason[:80]})")
 
-        return {
-            "router_decision": router_decision_val,
-            "reason": res.reason,
-            "current_agent": "router",
-        }
+            return {
+                "router_decision": router_decision_val,
+                "reason": res.reason,
+                "current_agent": "router",
+            }
+        except Exception as e:
+            logger.error(f"[router] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "router_decision": "hybrid",
+                "reason": f"Router fallback: {e}",
+                "current_agent": "router",
+            }
 
     def query_rewriter_node(self, state: AgentState) -> dict:
         history = state.get("user_history") or []
@@ -211,80 +221,109 @@ class ChatWorkflow:
 
         logger.debug(f"[rewriter] Rewriting query with {len(history)} history turns")
 
-        rewriter_llm = self.llm.with_structured_output(RewrittenQuery)
-        history_text = _format_history(history)
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """Rewrite the user's latest question to be fully self-contained.
-                Resolve pronouns and references (it, that, they, the function, etc.) using conversation history.
-                Keep the same intent. If already self-contained, return it unchanged."""),
-            ("user", "History:\n{history}\n\nLatest question: {query}"),
-        ])
-        chain = prompt | rewriter_llm
-        result: RewrittenQuery = chain.invoke({
-            "history": history_text,
-            "query": state["user_query"],
-        })
-        logger.debug(f"[rewriter] \"{state['user_query'][:50]}...\" -> \"{result.rewritten_query[:60]}...\"")
-        return {
-            "rewritten_query": result.rewritten_query,
-            "current_agent": "query_rewriter",
-        }
+        try:
+            rewriter_llm = self.llm.with_structured_output(RewrittenQuery)
+            history_text = _format_history(history)
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """Rewrite the user's latest question to be fully self-contained.
+                    Resolve pronouns and references (it, that, they, the function, etc.) using conversation history.
+                    Keep the same intent. If already self-contained, return it unchanged."""),
+                ("user", "History:\n{history}\n\nLatest question: {query}"),
+            ])
+            chain = prompt | rewriter_llm
+            result: RewrittenQuery = chain.invoke({
+                "history": history_text,
+                "query": state["user_query"],
+            })
+            logger.debug(f"[rewriter] \"{state['user_query'][:50]}...\" -> \"{result.rewritten_query[:60]}...\"")
+            return {
+                "rewritten_query": result.rewritten_query,
+                "current_agent": "query_rewriter",
+            }
+        except Exception as e:
+            logger.error(f"[rewriter] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "rewritten_query": state["user_query"],
+                "current_agent": "query_rewriter",
+            }
 
     def architect_node(self, state: AgentState) -> dict:
         query = state.get("rewritten_query") or state["user_query"]
         logger.info(f"[architect] Running architecture search for: \"{query[:60]}...\"")
 
-        res = self.query_engine.architect_search(query)
+        try:
+            res = self.query_engine.architect_search(query)
 
-        graph_res = None
-        vector_res = []
+            graph_res = None
+            vector_res = []
 
-        if res:
-            graph_res = GraphResult(
-                is_fallback=False,
-                data=res.get("data", []),
-                method="architect",
-                timestamp=res.get("timestamp", time.time()),
-            )
+            if res:
+                graph_res = GraphResult(
+                    is_fallback=False,
+                    data=res.get("data", []),
+                    method="architect",
+                    timestamp=res.get("timestamp", time.time()),
+                )
 
-            critical_files = self.query_engine.extract_critical_path_files(res, limit=4)
-            if critical_files:
-                logger.debug(f"[architect] Enriching with vector data for {len(critical_files)} files")
-                vector_data = self.vector_store.vector_search(query, filenames=critical_files)
-                reranked = self.vector_store.rerank(vector_data, query, top_k=4)
-                vector_res = [
-                    {"metadata": item[0], "score": float(item[1]), "content": item[2]}
-                    for item in reranked
-                ]
+                critical_files = self.query_engine.extract_critical_path_files(res, limit=4)
+                if critical_files:
+                    logger.debug(f"[architect] Enriching with vector data for {len(critical_files)} files")
+                    vector_data = self.vector_store.vector_search(query, filenames=critical_files)
+                    reranked = self.vector_store.rerank(vector_data, query, top_k=4)
+                    vector_res = [
+                        {"metadata": item[0], "score": float(item[1]), "content": item[2]}
+                        for item in reranked
+                    ]
 
-        logger.info(f"[architect] -> {len(graph_res['data']) if graph_res else 0} graph records, {len(vector_res)} vectors")
-        return {
-            "graph_result": graph_res,
-            "vector_result": vector_res,
-            "architect_subtype": res.get("subtype", "") if res else "",
-            "current_agent": "architect",
-        }
+            logger.info(f"[architect] -> {len(graph_res['data']) if graph_res else 0} graph records, {len(vector_res)} vectors")
+            return {
+                "graph_result": graph_res,
+                "vector_result": vector_res,
+                "architect_subtype": res.get("subtype", "") if res else "",
+                "current_agent": "architect",
+            }
+        except Exception as e:
+            logger.error(f"[architect] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "graph_result": None,
+                "vector_result": [],
+                "architect_subtype": "",
+                "current_agent": "architect",
+            }
 
     def graph_node(self, state: AgentState) -> dict:
         query = state.get("rewritten_query") or state["user_query"]
         logger.debug(f"[graph] Searching Neo4j for: \"{query[:60]}...\"")
 
-        res = self.query_engine.graph_search(query)
-        graph_res = None
-        if res:
-            graph_res = GraphResult(
-                is_fallback=res.get("is_fallback", False),
-                data=res.get("data", []),
-                method=res.get("method", "llm"),
-                timestamp=res.get("timestamp", time.time()),
-            )
+        try:
+            res = self.query_engine.graph_search(query)
+            graph_res = None
+            if res:
+                graph_res = GraphResult(
+                    is_fallback=res.get("is_fallback", False),
+                    data=res.get("data", []),
+                    method=res.get("method", "llm"),
+                    timestamp=res.get("timestamp", time.time()),
+                )
 
-        data_count = len(graph_res['data']) if graph_res else 0
-        logger.debug(f"[graph] -> {data_count} records (method: {res.get('method', '?') if res else 'none'})")
-        return {
-            "graph_result": graph_res,
-            "current_agent": "graph",
-        }
+            data_count = len(graph_res['data']) if graph_res else 0
+            logger.debug(f"[graph] -> {data_count} records (method: {res.get('method', '?') if res else 'none'})")
+            return {
+                "graph_result": graph_res,
+                "current_agent": "graph",
+            }
+        except Exception as e:
+            logger.error(f"[graph] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "graph_result": None,
+                "current_agent": "graph",
+            }
 
     def vector_node(self, state: AgentState) -> dict:
         query = state.get("rewritten_query") or state["user_query"]
@@ -296,22 +335,31 @@ class ChatWorkflow:
 
         logger.debug(f"[vector] Searching vectors{', filtered by ' + str(len(filenames)) + ' files' if filenames else ''}")
 
-        if filenames:
-            vector_data = self.vector_store.vector_search(query, filenames=filenames)
-        else:
-            vector_data = self.vector_store.search(query)
+        try:
+            if filenames:
+                vector_data = self.vector_store.vector_search(query, filenames=filenames)
+            else:
+                vector_data = self.vector_store.search(query)
 
-        reranked = self.vector_store.rerank(vector_data, query, top_k=5)
+            reranked = self.vector_store.rerank(vector_data, query, top_k=5)
 
-        vector_res = [
-            {"metadata": item[0], "score": float(item[1]), "content": item[2]}
-            for item in reranked
-        ]
-        logger.debug(f"[vector] -> {len(vector_res)} chunks after rerank")
-        return {
-            "vector_result": vector_res,
-            "current_agent": "vector",
-        }
+            vector_res = [
+                {"metadata": item[0], "score": float(item[1]), "content": item[2]}
+                for item in reranked
+            ]
+            logger.debug(f"[vector] -> {len(vector_res)} chunks after rerank")
+            return {
+                "vector_result": vector_res,
+                "current_agent": "vector",
+            }
+        except Exception as e:
+            logger.error(f"[vector] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "vector_result": [],
+                "current_agent": "vector",
+            }
 
     def synthesizer_node(self, state: AgentState) -> dict:
         graph_res = state.get("graph_result")
@@ -325,15 +373,23 @@ class ChatWorkflow:
         context_len = len(formatted_context)
         logger.info(f"[synthesizer] Generating answer from {context_len} chars of context")
 
-        response = self.answer_engine.generate_response(query, formatted_context, history_text)
-
-        logger.info(f"[synthesizer] Answer generated ({len(response.answer)} chars, confidence={response.score:.2f})")
-
-        return {
-            "context": formatted_context,
-            "final_answer": response.answer,
-            "current_agent": "synthesizer",
-        }
+        try:
+            response = self.answer_engine.generate_response(query, formatted_context, history_text)
+            logger.info(f"[synthesizer] Answer generated ({len(response.answer)} chars, confidence={response.score:.2f})")
+            return {
+                "context": formatted_context,
+                "final_answer": response.answer,
+                "current_agent": "synthesizer",
+            }
+        except Exception as e:
+            logger.error(f"[synthesizer] Failed: {type(e).__name__}: {e}")
+            for line in traceback.format_exc().splitlines():
+                logger.error(f"  {line}")
+            return {
+                "context": formatted_context,
+                "final_answer": "I encountered an error while generating the answer. Please try rephrasing your question.",
+                "current_agent": "synthesizer",
+            }
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)

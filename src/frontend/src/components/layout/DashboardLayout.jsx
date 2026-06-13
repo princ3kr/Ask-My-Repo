@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Hexagon, Sun, Book, User, GitBranch, Menu } from 'lucide-react';
+import { Sun, Moon, Book, User, GitBranch, Menu } from 'lucide-react';
+import logo from '../../assets/Ask-My-repo.png';
 
 const MIN_LEFT = 180;
 const MAX_LEFT = 500;
@@ -14,6 +15,8 @@ export default function DashboardLayout({
   rightSidebar,
   repoName,
   topBarExtra,
+  theme = 'dark',
+  onToggleTheme,
   onLeftWidthChange,
   onRightWidthChange,
 }) {
@@ -63,7 +66,7 @@ export default function DashboardLayout({
   }, [onLeftWidthChange, onRightWidthChange]);
 
   return (
-    <div className="flex flex-col h-screen bg-background text-gray-300 font-sans overflow-hidden">
+    <div className={`flex flex-col h-screen bg-background font-sans overflow-hidden ${theme === 'light' ? 'light-theme text-gray-800' : 'text-gray-300'}`}>
       {/* Top Header */}
       <header className="h-12 flex items-center justify-between px-3 border-b border-surface-muted bg-panel shrink-0 z-20">
         <div className="flex items-center gap-3">
@@ -75,7 +78,7 @@ export default function DashboardLayout({
             <Menu size={16} />
           </button>
           <div className="flex items-center gap-2">
-            <Hexagon className="text-accent" size={20} />
+            <img src={logo} alt="Ask My Repo" className="h-5 w-auto" />
             <span className="font-semibold text-white tracking-wide text-sm">Ask My Repo</span>
           </div>
           {repoName && (
@@ -90,7 +93,13 @@ export default function DashboardLayout({
 
         <div className="flex items-center gap-1">
           {topBarExtra}
-          <button className="text-text-dim hover:text-white p-1.5 rounded hover:bg-surface-muted transition-colors"><Sun size={15} /></button>
+          <button
+            onClick={onToggleTheme}
+            className="text-text-dim hover:text-white p-1.5 rounded hover:bg-surface-muted transition-colors"
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
           <button className="text-text-dim hover:text-white p-1.5 rounded hover:bg-surface-muted transition-colors"><Book size={15} /></button>
           <div className="w-7 h-7 rounded-full bg-accent/20 text-accent flex items-center justify-center font-semibold text-xs border border-accent/30 ml-1">
             U

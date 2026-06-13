@@ -21,6 +21,7 @@ const getOrCreateSessionId = () => {
 };
 
 export default function App() {
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
     const [repoUrl, setRepoUrl] = useState('');
     const [repoId, setRepoId] = useState('');
     const [isParsing, setIsParsing] = useState(false);
@@ -36,9 +37,14 @@ export default function App() {
     const [messages, setMessages] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [expandedReason, setExpandedReason] = useState({});
+    const [terminalOpen, setTerminalOpen] = useState(false);
+    const [terminalHeight, setTerminalHeight] = useState(220);
     const pollRef = useRef(null);
     const messagesEndRef = useRef(null);
     const graphRef = useRef(null);
+    const terminalDragRef = useRef(null);
+    const terminalStartY = useRef(0);
+    const terminalStartSize = useRef(0);
 
     useEffect(() => {
         return () => {
@@ -245,9 +251,18 @@ export default function App() {
         setRepoId('');
     };
 
+    const toggleTheme = useCallback(() => {
+        setTheme(prev => {
+            const next = prev === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('theme', next);
+            return next;
+        });
+    }, []);
+
     const handleNodeClick = useCallback((node) => {
         setSelectedNode(node);
         setSelectedFilePath(node.data?.path || null);
+        setTerminalOpen(true);
     }, []);
 
     const handleFileSelect = useCallback((filePath) => {
@@ -263,8 +278,41 @@ export default function App() {
         }
     }, [graphData]);
 
+    const handleTerminalResizeStart = useCallback((e) => {
+        e.preventDefault();
+        terminalDragRef.current = true;
+        terminalStartY.current = e.clientY;
+        terminalStartSize.current = terminalHeight;
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+    }, [terminalHeight]);
+
+    useEffect(() => {
+        const handleMove = (e) => {
+            if (!terminalDragRef.current) return;
+            const delta = terminalStartY.current - e.clientY;
+            const next = Math.max(100, Math.min(600, terminalStartSize.current + delta));
+            setTerminalHeight(next);
+        };
+        const handleUp = () => {
+            terminalDragRef.current = null;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        return () => {
+            window.removeEventListener('mousemove', handleMove);
+            window.removeEventListener('mouseup', handleUp);
+        };
+    }, []);
+
     return (
-        <DashboardLayout
+        <>
+            <div className="grain-overlay" />
+            <DashboardLayout
+            theme={theme}
+            onToggleTheme={toggleTheme}
             repoName={isParsed ? repoShortName(repoUrl) : ''}
             topBarExtra={
                 isParsed ? (
@@ -307,49 +355,77 @@ export default function App() {
                 ) : null
             }
         >
-            <div className="flex-1 relative overflow-hidden bg-background">
-                {/* Overlay Setup Panel when not parsed */}
-                {!isParsed && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background">
-                        <SetupPanel
-                            repoUrl={repoUrl}
-                            setRepoUrl={setRepoUrl}
-                            handleParse={handleParse}
-                            isParsing={isParsing}
-                            jobProgress={jobProgress}
-                            messages={messages}
-                            handleSend={handleSend}
-                            isTyping={isTyping}
-                            toggleReason={toggleReason}
-                            expandedReason={expandedReason}
-                            messagesEndRef={messagesEndRef}
-                        />
-                    </div>
-                )}
+            <div className="flex-1 flex flex-col overflow-hidden bg-background">
+                {/* Graph area (top) */}
+                <div className="relative flex-1 overflow-hidden">
+                    {/* Overlay Setup Panel when not parsed */}
+                    {!isParsed && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background">
+                            <SetupPanel
+                                repoUrl={repoUrl}
+                                setRepoUrl={setRepoUrl}
+                                handleParse={handleParse}
+                                isParsing={isParsing}
+                                jobProgress={jobProgress}
+                                messages={messages}
+                                handleSend={handleSend}
+                                isTyping={isTyping}
+                                toggleReason={toggleReason}
+                                expandedReason={expandedReason}
+                                messagesEndRef={messagesEndRef}
+                            />
+                        </div>
+                    )}
 
-                {/* ReactFlow Graph */}
-                {isParsed && graphData.nodes?.length > 0 && (
-                    <ReactFlowGraph
-                        ref={graphRef}
-                        graphData={graphData}
-                        onNodeClick={handleNodeClick}
-                        selectedNodeId={selectedNode?.id || null}
-                        selectedFilePath={selectedFilePath}
+                    {/* ReactFlow Graph */}
+                    {isParsed && graphData.nodes?.length > 0 && (
+                        <ReactFlowGraph
+                            ref={graphRef}
+                            graphData={graphData}
+                            onNodeClick={handleNodeClick}
+                            selectedNodeId={selectedNode?.id || null}
+                            selectedFilePath={selectedFilePath}
+                        />
+                    )}
+
+                    {/* Empty state when parsed but no graph data */}
+                    {isParsed && (!graphData.nodes || graphData.nodes.length === 0) && (
+                        <div className="flex items-center justify-center h-full text-text-dim text-sm">
+                            Loading graph data...
+                        </div>
+                    )}
+
+                    {/* Terminal toggle button */}
+                    {isParsed && selectedNode && (
+                        <button
+                            onClick={() => setTerminalOpen(p => !p)}
+                            className="absolute bottom-2 right-2 z-10 px-2.5 py-1 rounded bg-panel border border-surface-muted text-[10px] text-text-dim hover:text-white hover:border-accent/40 transition-colors flex items-center gap-1.5 shadow-lg"
+                        >
+                            <div className={`w-2 h-2 rounded-full ${terminalOpen ? 'bg-green-500' : 'bg-text-dim'}`} />
+                            {terminalOpen ? 'Close Terminal' : 'Open Terminal'}
+                        </button>
+                    )}
+                </div>
+
+                {/* Terminal resize handle */}
+                {isParsed && terminalOpen && (
+                    <div
+                        className="h-1 cursor-row-resize hover:bg-accent/40 bg-transparent transition-colors shrink-0 relative z-10"
+                        onMouseDown={handleTerminalResizeStart}
                     />
                 )}
 
-                {/* Empty state when parsed but no graph data */}
-                {isParsed && (!graphData.nodes || graphData.nodes.length === 0) && (
-                    <div className="flex items-center justify-center h-full text-text-dim text-sm">
-                        Loading graph data...
+                {/* Node Details / Terminal Panel (bottom) */}
+                {isParsed && terminalOpen && selectedNode && (
+                    <div
+                        className="shrink-0 border-t border-surface-muted bg-panel z-10"
+                        style={{ height: terminalHeight }}
+                    >
+                        <NodeDetails node={selectedNode} graphData={graphData} />
                     </div>
                 )}
             </div>
-
-            {/* Node Details Panel at bottom of center area */}
-            {isParsed && selectedNode && (
-                <NodeDetails node={selectedNode} graphData={graphData} />
-            )}
         </DashboardLayout>
+        </>
     );
 }
