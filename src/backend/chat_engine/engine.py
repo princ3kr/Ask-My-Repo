@@ -1,4 +1,6 @@
 import time
+import logging
+import traceback
 from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
@@ -8,6 +10,8 @@ from langgraph.graph import StateGraph, END
 from src.backend.agent_state.state import AgentState, GraphResult
 from src.backend.services.query_engine import QueryEngine
 from src.backend.services.vector_db import VectorStore
+
+logger = logging.getLogger("askmyrepo.engine")
 
 
 class RouterDecision(BaseModel):
@@ -128,7 +132,13 @@ class ChatWorkflow:
         self.answer_engine = AnswerEngine(llm)
         self.app = self._build_graph()
 
+        model_name = getattr(llm, 'model_name', str(llm.__class__.__name__))
+        logger.info(f"ChatWorkflow initialized: repo={repo_id}, model={model_name}")
+
     def router_node(self, state: AgentState) -> dict:
+        query = state["user_query"]
+        logger.debug(f"[router] Routing query: \"{query[:60]}...\"")
+
         router_llm = self.llm.with_structured_output(RouterDecision)
         router_prompt = ChatPromptTemplate.from_messages([
             ('system', """You are a query router for code repository Q&A.
@@ -171,9 +181,9 @@ class ChatWorkflow:
         ])
 
         decision_chain = router_prompt | router_llm
-        res: RouterDecision = decision_chain.invoke({"query": state["user_query"]})
+        res: RouterDecision = decision_chain.invoke({"query": query})
 
-        self.query_engine._router_cache[state["user_query"]] = res
+        self.query_engine._router_cache[query] = res
 
         if res.decision == "architecture":
             router_decision_val = "architecture"
@@ -181,6 +191,8 @@ class ChatWorkflow:
             router_decision_val = "graph"
         else:
             router_decision_val = "hybrid"
+
+        logger.info(f"[router] -> {router_decision_val} (reason: {res.reason[:80]})")
 
         return {
             "router_decision": router_decision_val,
@@ -191,10 +203,13 @@ class ChatWorkflow:
     def query_rewriter_node(self, state: AgentState) -> dict:
         history = state.get("user_history") or []
         if not history:
+            logger.debug("[rewriter] No history — skipping rewrite")
             return {
                 "rewritten_query": state["user_query"],
                 "current_agent": "query_rewriter",
             }
+
+        logger.debug(f"[rewriter] Rewriting query with {len(history)} history turns")
 
         rewriter_llm = self.llm.with_structured_output(RewrittenQuery)
         history_text = _format_history(history)
@@ -209,6 +224,7 @@ class ChatWorkflow:
             "history": history_text,
             "query": state["user_query"],
         })
+        logger.debug(f"[rewriter] \"{state['user_query'][:50]}...\" -> \"{result.rewritten_query[:60]}...\"")
         return {
             "rewritten_query": result.rewritten_query,
             "current_agent": "query_rewriter",
@@ -216,6 +232,8 @@ class ChatWorkflow:
 
     def architect_node(self, state: AgentState) -> dict:
         query = state.get("rewritten_query") or state["user_query"]
+        logger.info(f"[architect] Running architecture search for: \"{query[:60]}...\"")
+
         res = self.query_engine.architect_search(query)
 
         graph_res = None
@@ -231,6 +249,7 @@ class ChatWorkflow:
 
             critical_files = self.query_engine.extract_critical_path_files(res, limit=4)
             if critical_files:
+                logger.debug(f"[architect] Enriching with vector data for {len(critical_files)} files")
                 vector_data = self.vector_store.vector_search(query, filenames=critical_files)
                 reranked = self.vector_store.rerank(vector_data, query, top_k=4)
                 vector_res = [
@@ -238,6 +257,7 @@ class ChatWorkflow:
                     for item in reranked
                 ]
 
+        logger.info(f"[architect] -> {len(graph_res['data']) if graph_res else 0} graph records, {len(vector_res)} vectors")
         return {
             "graph_result": graph_res,
             "vector_result": vector_res,
@@ -247,6 +267,8 @@ class ChatWorkflow:
 
     def graph_node(self, state: AgentState) -> dict:
         query = state.get("rewritten_query") or state["user_query"]
+        logger.debug(f"[graph] Searching Neo4j for: \"{query[:60]}...\"")
+
         res = self.query_engine.graph_search(query)
         graph_res = None
         if res:
@@ -256,6 +278,9 @@ class ChatWorkflow:
                 method=res.get("method", "llm"),
                 timestamp=res.get("timestamp", time.time()),
             )
+
+        data_count = len(graph_res['data']) if graph_res else 0
+        logger.debug(f"[graph] -> {data_count} records (method: {res.get('method', '?') if res else 'none'})")
         return {
             "graph_result": graph_res,
             "current_agent": "graph",
@@ -269,6 +294,8 @@ class ChatWorkflow:
         if graph_res:
             filenames = self.query_engine._extract_filenames_safe(graph_res, query)
 
+        logger.debug(f"[vector] Searching vectors{', filtered by ' + str(len(filenames)) + ' files' if filenames else ''}")
+
         if filenames:
             vector_data = self.vector_store.vector_search(query, filenames=filenames)
         else:
@@ -280,6 +307,7 @@ class ChatWorkflow:
             {"metadata": item[0], "score": float(item[1]), "content": item[2]}
             for item in reranked
         ]
+        logger.debug(f"[vector] -> {len(vector_res)} chunks after rerank")
         return {
             "vector_result": vector_res,
             "current_agent": "vector",
@@ -294,7 +322,12 @@ class ChatWorkflow:
         history_text = _format_history(state.get("user_history") or [])
         query = state.get("rewritten_query") or state["user_query"]
 
+        context_len = len(formatted_context)
+        logger.info(f"[synthesizer] Generating answer from {context_len} chars of context")
+
         response = self.answer_engine.generate_response(query, formatted_context, history_text)
+
+        logger.info(f"[synthesizer] Answer generated ({len(response.answer)} chars, confidence={response.score:.2f})")
 
         return {
             "context": formatted_context,

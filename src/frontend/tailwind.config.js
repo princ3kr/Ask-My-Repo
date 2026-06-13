@@ -7,10 +7,19 @@ export default {
   theme: {
     extend: {
         colors: {
-            background: '#050508',
-            accent: '#00D4FF',
-            surface: '#0A0A10',
-            'surface-muted': '#14141C',
+            background: '#0d1117',
+            panel: '#161b22',
+            accent: '#8b5cf6',
+            'accent-hover': '#7c3aed',
+            surface: '#1c2128',
+            'surface-muted': '#22272e',
+            'node-class': '#2563eb',
+            'node-class-bg': '#1e3a8a',
+            'node-file': '#059669',
+            'node-file-bg': '#064e3b',
+            'node-model': '#d97706',
+            'node-model-bg': '#78350f',
+            'text-dim': '#8b949e',
         },
         fontFamily: {
             mono: ['"Geist Mono"', 'monospace'],

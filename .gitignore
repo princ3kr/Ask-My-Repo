@@ -1,8 +1,11 @@
 .env
+.env.*
+!.env.example
 temp/
 .venv
 .gitattributes
 notebook/graph.html
+notebook/*_graph.html
 
 # Python
 __pycache__/
@@ -25,11 +28,18 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Coverage
+htmlcov/
+.coverage
+coverage/
 
 # Notebooks
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
-notebook/graph.html
 
 # IDEs
 .vscode/
@@ -40,6 +50,11 @@ chromadb/
 scratch/
 fastembed_cache
 models/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
 
 uv.lock
 data/
