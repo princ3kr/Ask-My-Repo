@@ -8,7 +8,7 @@ import SetupPanel from './components/panels/SetupPanel';
 import { RotateCcw } from 'lucide-react';
 import { normalizeRepoUrl, repoShortName } from './utils';
 
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+const API_URL = '/api';
 const SESSION_STORAGE_KEY = 'ask_my_repo_session_id';
 
 const getOrCreateSessionId = () => {
