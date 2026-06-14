@@ -21,7 +21,7 @@ export default function ChatHistory({ messages, isTyping, expandedReason, toggle
                     <div className={clsx(
                         "flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
                         msg.role === 'user'
-                            ? 'bg-white text-background'
+                            ? 'bg-accent text-white'
                             : 'bg-white/5 text-accent'
                     )}>
                         {msg.role === 'user' ? <User size={11} /> : <Bot size={11} />}
@@ -31,8 +31,8 @@ export default function ChatHistory({ messages, isTyping, expandedReason, toggle
                         <div className={clsx(
                             "inline-block rounded-xl px-3 py-2 text-sm leading-relaxed",
                             msg.role === 'user'
-                                ? 'bg-accent/20 text-gray-100 rounded-tr-sm'
-                                : 'bg-surface border border-surface-muted text-gray-300 rounded-tl-sm'
+                                ? 'bg-accent/20 text-text-color rounded-tr-sm'
+                                : 'glass-panel-light text-text-color rounded-tl-sm'
                         )}>
                             <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                         </div>
@@ -47,7 +47,7 @@ export default function ChatHistory({ messages, isTyping, expandedReason, toggle
                                     Why this answer
                                 </button>
                                 {expandedReason[msg.id] && (
-                                    <div className="mt-1 rounded-lg border border-surface-muted bg-black/40 p-2 text-[11px] leading-relaxed text-text-dim text-left">
+                                    <div className="mt-1 rounded-lg glass-panel-light p-2 text-[11px] leading-relaxed text-text-dim text-left">
                                         {msg.reason}
                                         {msg.rewritten_query && (
                                             <div className="mt-1 pt-1 border-t border-surface-muted/50">
@@ -67,7 +67,7 @@ export default function ChatHistory({ messages, isTyping, expandedReason, toggle
                     <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/5 text-accent">
                         <Bot size={11} />
                     </div>
-                    <div className="inline-flex items-center gap-2 rounded-xl bg-surface border border-surface-muted px-3 py-2">
+                    <div className="inline-flex items-center gap-2 rounded-xl glass-panel-light px-3 py-2">
                         <Loader2 size={14} className="animate-spin text-accent/70" />
                         <span className="text-xs text-text-dim">Looking through your codebase…</span>
                     </div>

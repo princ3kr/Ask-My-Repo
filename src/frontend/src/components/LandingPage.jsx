@@ -90,10 +90,9 @@ export default function LandingPage({ repoUrl, setRepoUrl, handleParse, isParsin
     return (
         <div className="relative h-[100dvh] overflow-hidden text-slate-200 bg-background">
             <InteractiveBackground />
-            <div className="grain" />
 
             <div className="relative z-10 flex h-full flex-col">
-                <header className="flex shrink-0 flex-col gap-3 border-b border-white/5 bg-[#050508]/50 px-4 py-3 backdrop-blur-xl sm:px-6 md:px-8">
+                <header className="flex shrink-0 flex-col gap-3 border-b border-white/5 bg-[#050508]/40 px-4 py-3 backdrop-blur-2xl sm:px-6 md:px-8">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex min-w-0 flex-col items-center gap-2 sm:items-start sm:gap-1">
                             <BrandLogo variant="header" />
@@ -205,7 +204,7 @@ export default function LandingPage({ repoUrl, setRepoUrl, handleParse, isParsin
                                                         Why this answer
                                                     </button>
                                                     {expandedReason[msg.id] && (
-                                                        <div className="mt-2 rounded-xl border border-white/5 bg-black/40 p-3 text-xs leading-relaxed text-white/50">
+                                                        <div className="mt-2 rounded-xl border border-white/5 bg-black/40 backdrop-blur-md p-3 text-xs leading-relaxed text-white/50">
                                                             {msg.reason}
                                                         </div>
                                                     )}

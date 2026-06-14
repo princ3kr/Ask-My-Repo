@@ -8,7 +8,7 @@ import SetupPanel from './components/panels/SetupPanel';
 import { RotateCcw } from 'lucide-react';
 import { normalizeRepoUrl, repoShortName } from './utils';
 
-const API_URL = '/api';
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 const SESSION_STORAGE_KEY = 'ask_my_repo_session_id';
 
 const getOrCreateSessionId = () => {
@@ -22,6 +22,10 @@ const getOrCreateSessionId = () => {
 
 export default function App() {
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+    useEffect(() => {
+        document.body.classList.toggle('light-theme', theme === 'light');
+    }, [theme]);
     const [repoUrl, setRepoUrl] = useState('');
     const [repoId, setRepoId] = useState('');
     const [isParsing, setIsParsing] = useState(false);
@@ -309,7 +313,6 @@ export default function App() {
 
     return (
         <>
-            <div className="grain-overlay" />
             <DashboardLayout
             theme={theme}
             onToggleTheme={toggleTheme}
@@ -355,12 +358,12 @@ export default function App() {
                 ) : null
             }
         >
-            <div className="flex-1 flex flex-col overflow-hidden bg-background">
+            <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Graph area (top) */}
                 <div className="relative flex-1 overflow-hidden">
                     {/* Overlay Setup Panel when not parsed */}
                     {!isParsed && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background">
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
                             <SetupPanel
                                 repoUrl={repoUrl}
                                 setRepoUrl={setRepoUrl}
@@ -399,7 +402,7 @@ export default function App() {
                     {isParsed && selectedNode && (
                         <button
                             onClick={() => setTerminalOpen(p => !p)}
-                            className="absolute bottom-2 right-2 z-10 px-2.5 py-1 rounded bg-panel border border-surface-muted text-[10px] text-text-dim hover:text-white hover:border-accent/40 transition-colors flex items-center gap-1.5 shadow-lg"
+                            className="absolute bottom-2 right-2 z-10 px-2.5 py-1 rounded glass-panel-light text-[10px] text-text-dim hover:text-white hover:border-accent/40 transition-colors flex items-center gap-1.5"
                         >
                             <div className={`w-2 h-2 rounded-full ${terminalOpen ? 'bg-green-500' : 'bg-text-dim'}`} />
                             {terminalOpen ? 'Close Terminal' : 'Open Terminal'}
@@ -418,7 +421,7 @@ export default function App() {
                 {/* Node Details / Terminal Panel (bottom) */}
                 {isParsed && terminalOpen && selectedNode && (
                     <div
-                        className="shrink-0 border-t border-surface-muted bg-panel z-10"
+                        className="shrink-0 border-t-0 glass-panel z-10"
                         style={{ height: terminalHeight }}
                     >
                         <NodeDetails node={selectedNode} graphData={graphData} />

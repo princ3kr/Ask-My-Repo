@@ -27,9 +27,9 @@ export default function NodeDetails({ node, graphData }) {
     const findNodeById = (id) => graphData?.nodes?.find(n => n.id === id);
 
     return (
-        <div className="flex flex-col h-full bg-panel">
+        <div className="flex flex-col h-full glass-panel rounded-none">
             {/* Tab bar */}
-            <div className="flex items-center border-b border-surface-muted bg-panel">
+            <div className="flex items-center border-b glass-panel-light border-0 rounded-none">
                 {TABS.map(tab => (
                     <button
                         key={tab}
@@ -38,7 +38,7 @@ export default function NodeDetails({ node, graphData }) {
                             "px-4 py-2 text-xs font-medium transition-colors relative",
                             activeTab === tab
                                 ? 'text-accent'
-                                : 'text-text-dim hover:text-gray-300'
+                                : 'text-text-dim hover:text-text-color'
                         )}
                     >
                         {tab}
@@ -66,7 +66,7 @@ export default function NodeDetails({ node, graphData }) {
                             </div>
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
-                                    <h3 className="text-sm font-semibold text-gray-200 truncate">{label}</h3>
+                                    <h3 className="text-sm font-semibold text-text-color truncate">{label}</h3>
                                     <span className={clsx(
                                         "text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded border",
                                         nodeType === 'Class' && 'text-blue-400 border-blue-500/20 bg-blue-500/10',
@@ -82,12 +82,12 @@ export default function NodeDetails({ node, graphData }) {
 
                         {/* Stats Grid */}
                         <div className="grid grid-cols-4 gap-2">
-                            {functions && <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{functions.length}</span><span className="text-[9px] text-text-dim">Functions</span></div>}
-                            {classes && <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{classes.length}</span><span className="text-[9px] text-text-dim">Classes</span></div>}
-                            {imports && <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{imports.length}</span><span className="text-[9px] text-text-dim">Imports</span></div>}
-                            {line_start && <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{line_start}{line_end ? `-${line_end}` : ''}</span><span className="text-[9px] text-text-dim">Lines</span></div>}
-                            <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{incomingEdges.length}</span><span className="text-[9px] text-text-dim">Incoming</span></div>
-                            <div className="bg-surface border border-surface-muted rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-gray-200">{outgoingEdges.length}</span><span className="text-[9px] text-text-dim">Outgoing</span></div>
+                            {functions && <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{functions.length}</span><span className="text-[9px] text-text-dim">Functions</span></div>}
+                            {classes && <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{classes.length}</span><span className="text-[9px] text-text-dim">Classes</span></div>}
+                            {imports && <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{imports.length}</span><span className="text-[9px] text-text-dim">Imports</span></div>}
+                            {line_start && <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{line_start}{line_end ? `-${line_end}` : ''}</span><span className="text-[9px] text-text-dim">Lines</span></div>}
+                            <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{incomingEdges.length}</span><span className="text-[9px] text-text-dim">Incoming</span></div>
+                            <div className="glass-panel-light rounded-lg p-2 text-center"><span className="block text-xs font-semibold text-text-color">{outgoingEdges.length}</span><span className="text-[9px] text-text-dim">Outgoing</span></div>
                         </div>
 
                         {/* Properties */}
@@ -95,7 +95,7 @@ export default function NodeDetails({ node, graphData }) {
                             {node.data && Object.entries(node.data).filter(([k]) => !['label', 'nodeType', 'functions', 'classes', 'imports', 'selected'].includes(k)).map(([key, val]) => (
                                 <div key={key} className="flex items-center gap-2 text-[11px]">
                                     <span className="text-text-dim font-mono min-w-[80px]">{key.replace(/_/g, ' ')}</span>
-                                    <span className="text-gray-300 truncate font-mono">
+                                    <span className="text-text-color truncate font-mono">
                                         {Array.isArray(val) ? val.join(', ') : String(val ?? '-')}
                                     </span>
                                 </div>
@@ -118,8 +118,8 @@ export default function NodeDetails({ node, graphData }) {
                                     {incomingEdges.map((edge, i) => {
                                         const sourceNode = findNodeById(edge.source);
                                         return (
-                                            <div key={i} className="flex items-center gap-2 text-[11px] bg-surface border border-surface-muted rounded-lg px-2.5 py-1.5">
-                                                <span className="text-gray-300 font-medium truncate max-w-[100px]">{sourceNode?.data?.label || edge.source}</span>
+                                            <div key={i} className="flex items-center gap-2 text-[11px] glass-panel-light rounded-lg px-2.5 py-1.5">
+                                                <span className="text-text-color font-medium truncate max-w-[100px]">{sourceNode?.data?.label || edge.source}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
                                                 <span className={clsx(
                                                     "text-[9px] font-semibold uppercase px-1 rounded",
@@ -129,7 +129,7 @@ export default function NodeDetails({ node, graphData }) {
                                                     !edge.label && 'text-text-dim'
                                                 )}>{edge.label || 'RELATES'}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
-                                                <span className="text-gray-300 font-medium truncate max-w-[100px]">{label}</span>
+                                                <span className="text-text-color font-medium truncate max-w-[100px]">{label}</span>
                                             </div>
                                         );
                                     })}
@@ -149,8 +149,8 @@ export default function NodeDetails({ node, graphData }) {
                                     {outgoingEdges.map((edge, i) => {
                                         const targetNode = findNodeById(edge.target);
                                         return (
-                                            <div key={i} className="flex items-center gap-2 text-[11px] bg-surface border border-surface-muted rounded-lg px-2.5 py-1.5">
-                                                <span className="text-gray-300 font-medium truncate max-w-[100px]">{label}</span>
+                                            <div key={i} className="flex items-center gap-2 text-[11px] bg-surface border border-surface-muted rounded-lg px-2.5 py-1.5 backdrop-blur-md">
+                                                <span className="text-text-color font-medium truncate max-w-[100px]">{label}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
                                                 <span className={clsx(
                                                     "text-[9px] font-semibold uppercase px-1 rounded",
@@ -160,7 +160,7 @@ export default function NodeDetails({ node, graphData }) {
                                                     !edge.label && 'text-text-dim'
                                                 )}>{edge.label || 'RELATES'}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
-                                                <span className="text-gray-300 font-medium truncate max-w-[100px]">{targetNode?.data?.label || edge.target}</span>
+                                                <span className="text-text-color font-medium truncate max-w-[100px]">{targetNode?.data?.label || edge.target}</span>
                                             </div>
                                         );
                                     })}

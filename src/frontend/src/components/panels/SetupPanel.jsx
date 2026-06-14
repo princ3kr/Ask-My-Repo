@@ -36,12 +36,7 @@ const StageStep = ({ stage, currentStage, isError }) => {
 
 export function ProgressPanel({ progress, message, stage, isError }) {
     return (
-        <div className={`relative overflow-hidden rounded-2xl p-5 sm:p-6 transition-all ${isError ? 'border-red-500/25 bg-red-500/5' : ''}`} style={{
-            background: 'var(--card-bg)',
-            backdropFilter: 'blur(20px)',
-            border: '1px solid ' + (isError ? 'rgba(248,113,113,0.25)' : 'var(--card-border)'),
-            boxShadow: '0 16px 40px -12px rgba(0,0,0,0.45)',
-        }}>
+        <div className={`relative overflow-hidden rounded-2xl p-5 sm:p-6 transition-all ${isError ? '!border-red-500/25 !bg-red-500/5' : 'glass-panel'}`}>
             <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
                     <p className="text-xs font-medium uppercase tracking-wider text-accent">
@@ -91,13 +86,7 @@ export default function SetupPanel({ repoUrl, setRepoUrl, handleParse, isParsing
             {/* Setup Card */}
             {!hasMessages && !showProgress && (
                 <div
-                    className="relative overflow-hidden rounded-2xl p-5 sm:p-7 transition-all hover:border-accent/15"
-                    style={{
-                        background: 'var(--card-bg)',
-                        backdropFilter: 'blur(20px)',
-                        border: '1px solid var(--card-border)',
-                        boxShadow: '0 24px 48px -12px rgba(0,0,0,0.5)',
-                    }}
+                    className="relative overflow-hidden rounded-2xl p-5 sm:p-7 transition-all hover:border-accent/15 glass-card-effect"
                 >
                     <p className="mb-1 text-xs uppercase tracking-[0.2em] text-accent">Get started</p>
                     <h2 className="mb-2 text-lg font-medium" style={{ color: 'var(--text-color)' }}>Connect a repository</h2>
@@ -135,7 +124,7 @@ export default function SetupPanel({ repoUrl, setRepoUrl, handleParse, isParsing
                         {FEATURES.map(({ icon: Icon, title, desc }) => (
                             <div
                                 key={title}
-                                className="flex flex-col items-start gap-1.5 p-2.5 rounded-xl"
+                                className="flex flex-col items-start gap-1.5 p-2.5 rounded-xl backdrop-blur-md"
                                 style={{
                                     background: 'var(--input-bg)',
                                     border: '1px solid var(--card-border)',
@@ -169,7 +158,7 @@ export default function SetupPanel({ repoUrl, setRepoUrl, handleParse, isParsing
                         <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
                             <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1 ${
                                 msg.role === 'user'
-                                    ? 'bg-white text-background ring-white/20'
+                                    ? 'bg-accent text-white ring-accent/30'
                                     : 'ring-1 text-accent'
                             }`} style={{
                                 background: msg.role === 'user' ? undefined : 'var(--card-bg)',
@@ -195,15 +184,15 @@ export default function SetupPanel({ repoUrl, setRepoUrl, handleParse, isParsing
                                             Why this answer
                                         </button>
                                         {expandedReason[msg.id] && (
-                                            <div
-                                                className="mt-1 rounded-lg p-2 text-[11px] leading-relaxed text-text-dim"
-                                                style={{
-                                                    background: 'var(--input-bg)',
-                                                    border: '1px solid var(--card-border)',
-                                                }}
-                                            >
-                                                {msg.reason}
-                                            </div>
+                <div
+                    className="mt-1 rounded-lg p-2 text-[11px] leading-relaxed text-text-dim backdrop-blur-md"
+                    style={{
+                        background: 'var(--input-bg)',
+                        border: '1px solid var(--card-border)',
+                    }}
+                >
+                    {msg.reason}
+                </div>
                                         )}
                                     </div>
                                 )}

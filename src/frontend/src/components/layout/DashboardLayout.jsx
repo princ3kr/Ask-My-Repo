@@ -66,9 +66,9 @@ export default function DashboardLayout({
   }, [onLeftWidthChange, onRightWidthChange]);
 
   return (
-    <div className={`flex flex-col h-screen bg-background font-sans overflow-hidden ${theme === 'light' ? 'light-theme text-gray-800' : 'text-gray-300'}`}>
+    <div className={`flex flex-col h-screen font-sans overflow-hidden ${theme === 'light' ? 'light-theme text-text-color' : 'text-text-color'}`}>
       {/* Top Header */}
-      <header className="h-12 flex items-center justify-between px-3 border-b border-surface-muted bg-panel shrink-0 z-20">
+      <header className="h-12 flex items-center justify-between px-3 border-b-0 glass-panel rounded-none shrink-0 z-20">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setLeftOpen(p => !p)}
@@ -79,12 +79,12 @@ export default function DashboardLayout({
           </button>
           <div className="flex items-center gap-2">
             <img src={logo} alt="Ask My Repo" className="h-5 w-auto" />
-            <span className="font-semibold text-white tracking-wide text-sm">Ask My Repo</span>
+            <span className="font-semibold text-text-color tracking-wide text-sm">Ask My Repo</span>
           </div>
           {repoName && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-surface border border-surface-muted rounded text-xs">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 glass-panel-light rounded text-xs">
               <GitBranch size={12} className="text-text-dim" />
-              <span className="text-gray-300">{repoName}</span>
+              <span className="text-text-color">{repoName}</span>
               <span className="w-1.5 h-1.5 rounded-full bg-green-500 ml-1 shadow-[0_0_6px_rgba(34,197,94,0.5)]" />
               <span className="text-green-400 text-[10px] font-medium">Indexed</span>
             </div>
@@ -111,7 +111,7 @@ export default function DashboardLayout({
       <div className="flex flex-1 overflow-hidden relative">
         {/* Left Sidebar */}
         <div
-          className="flex flex-col border-r border-surface-muted bg-panel overflow-hidden shrink-0 transition-all duration-200"
+          className="flex flex-col border-r-0 glass-panel overflow-hidden shrink-0 transition-all duration-200"
           style={{ width: leftOpen ? leftWidth : 0, minWidth: leftOpen ? MIN_LEFT : 0, opacity: leftOpen ? 1 : 0 }}
         >
           <div className="flex-1 overflow-hidden flex flex-col">
@@ -128,7 +128,7 @@ export default function DashboardLayout({
         )}
 
         {/* Center Canvas */}
-        <main className="flex-1 flex flex-col relative bg-background min-w-0">
+        <main className="flex-1 flex flex-col relative min-w-0">
           {children}
         </main>
 
@@ -142,10 +142,10 @@ export default function DashboardLayout({
 
         {/* Right Sidebar */}
         <div
-          className="flex flex-col border-l border-surface-muted bg-panel overflow-hidden shrink-0 transition-all duration-200"
+          className="flex flex-col border-l-0 glass-panel overflow-hidden shrink-0 transition-all duration-200"
           style={{ width: rightOpen ? rightWidth : 0, minWidth: rightOpen ? MIN_RIGHT : 0, opacity: rightOpen ? 1 : 0 }}
         >
-          <div className="flex items-center justify-between px-3 py-2 border-b border-surface-muted">
+          <div className="flex items-center justify-between px-3 py-2 border-b glass-panel-light border-0 rounded-none">
             <span className="text-xs font-semibold text-text-dim uppercase tracking-wider">Details</span>
             <button
               onClick={() => setRightOpen(p => !p)}
@@ -164,7 +164,7 @@ export default function DashboardLayout({
         {!rightOpen && (
           <button
             onClick={() => setRightOpen(true)}
-            className="absolute right-2 top-2 z-10 text-text-dim hover:text-white p-1.5 rounded bg-panel/80 border border-surface-muted hover:bg-surface-muted transition-colors text-xs"
+            className="absolute right-2 top-2 z-10 text-text-dim hover:text-white p-1.5 rounded glass-panel-light hover:bg-white/5 transition-colors text-xs"
             title="Open details"
           >
             Details
@@ -173,7 +173,7 @@ export default function DashboardLayout({
       </div>
 
       {/* Bottom Status Bar */}
-      <div className="h-6 flex items-center justify-between px-3 border-t border-surface-muted bg-panel text-[10px] text-text-dim shrink-0">
+      <div className="h-6 flex items-center justify-between px-3 border-t-0 glass-panel text-[10px] text-text-dim shrink-0">
         <div className="flex items-center gap-3">
           {repoName && <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-green-500" /> {repoName}</span>}
         </div>

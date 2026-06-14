@@ -19,6 +19,8 @@ export default {
             'node-file-bg': '#064e3b',
             'node-model': '#f59e0b',
             'node-model-bg': '#78350f',
+            'text-color': 'var(--text-color)',
+            'text-muted': 'var(--text-muted)',
             'text-dim': 'var(--text-dim)',
         },
         fontFamily: {

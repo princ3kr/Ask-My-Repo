@@ -1,0 +1,15 @@
+.venv
+__pycache__
+*.pyc
+.env
+*.egg-info
+.git
+.gitattributes
+.gitignore
+notebook
+data
+chromadb
+scratch
+models
+fastembed_cache
+*.md

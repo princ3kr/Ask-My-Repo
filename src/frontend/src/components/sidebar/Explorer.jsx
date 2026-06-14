@@ -112,9 +112,9 @@ export default function Explorer({ treePaths = [], stats = {}, selectedFilePath,
 
             {/* Quick Stats */}
             <div className="px-3 py-2 border-b border-surface-muted/50 flex gap-2 text-[10px]">
-                <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">C: {stats.classes || 0}</span>
-                <span className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">F: {stats.functions || 0}</span>
-                <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">E: {stats.edges || 0}</span>
+                <span className="px-1.5 py-0.5 rounded glass-panel-light text-blue-400">C: {stats.classes || 0}</span>
+                <span className="px-1.5 py-0.5 rounded glass-panel-light text-purple-400">F: {stats.functions || 0}</span>
+                <span className="px-1.5 py-0.5 rounded glass-panel-light text-emerald-400">E: {stats.edges || 0}</span>
             </div>
 
             {/* Search */}
@@ -126,7 +126,7 @@ export default function Explorer({ treePaths = [], stats = {}, selectedFilePath,
                         placeholder="Filter files..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-surface border border-surface-muted rounded-md py-1.5 pl-7 pr-2 text-xs text-white placeholder-text-dim outline-none focus:border-accent/40 transition-colors"
+                        className="w-full glass-panel-light rounded-md py-1.5 pl-7 pr-2 text-xs text-text-color placeholder-text-dim outline-none focus:border-accent/40 transition-colors"
                     />
                 </div>
             </div>
