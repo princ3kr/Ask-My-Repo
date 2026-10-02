@@ -160,6 +160,8 @@ def friendly_error(message: str, details: str = "") -> str:
         return "This repository is very large and ran out of memory while indexing. Try a smaller repo."
     if "could not derive a repository name" in lower:
         return "That doesn't look like a valid repository URL."
+    if "no python files" in lower or "empty or on an unexpected ref" in lower:
+        return "We couldn't read that repository — the checkout came back empty. Try again in a moment."
     if "git" in lower and ("clone" in lower or "failed" in lower or "not found" in lower
                            or "authentication" in lower or "not on path" in lower):
         return "We couldn't download that repository. Please double-check the URL."

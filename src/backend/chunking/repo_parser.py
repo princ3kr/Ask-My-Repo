@@ -88,6 +88,37 @@ def get_filename(url: str) -> str | None:
     return result
 
 
+def _is_self_contained_clone(target: Path) -> bool:
+    """True only if `target` is its own git checkout.
+
+    This guard is not paranoia. `git -C <dir>` does not require `<dir>` to be a
+    repository: if there is no `.git` inside it, git walks *up* and operates on
+    whichever ancestor repository it finds first.
+
+    That made this indexer destructive. `src/data/princ3kr-Ask-My-Repo` was a
+    plain directory (one stray file, no `.git`), so `_refresh_clone` ran
+    `fetch` and then `reset --hard origin/mainV2` against **this project's own
+    repository** — silently discarding uncommitted work — and then reported
+    "Refreshed existing clone". Indexing 0 files was the only visible symptom.
+    """
+    git_marker = target / ".git"
+    if not git_marker.exists():
+        return False
+
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--show-toplevel"],
+            check=True, capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+    except Exception:
+        return False
+
+    try:
+        return Path(top).resolve() == target.resolve()
+    except OSError:
+        return False
+
+
 def _refresh_clone(target: Path, repo_link: str) -> bool:
     """Fast-forward an existing shallow clone to the remote's current HEAD.
 
@@ -95,7 +126,18 @@ def _refresh_clone(target: Path, repo_link: str) -> bool:
     looked like at first clone. Because the pipeline also short-circuits when
     the graph and vectors already exist, that stale index then persisted
     indefinitely and answered questions about files that no longer existed.
+
+    Refuses to touch anything that is not a self-contained checkout, and
+    verifies afterwards that files actually landed — `reset --hard` can report
+    success while leaving an empty working tree.
     """
+    if not _is_self_contained_clone(target):
+        logger.warning(
+            f"{target} exists but is not its own git checkout; discarding it "
+            "rather than risk operating on a parent repository."
+        )
+        return False
+
     try:
         subprocess.run(
             ["git", "-C", str(target), "fetch", "--depth", "1", "origin"],
@@ -109,10 +151,25 @@ def _refresh_clone(target: Path, repo_link: str) -> bool:
             ["git", "-C", str(target), "reset", "--hard", f"origin/{head}"],
             check=True, capture_output=True, text=True, timeout=120,
         )
-        return True
     except Exception as e:
         logger.info(f"Could not refresh existing clone ({e}); will re-clone.")
         return False
+
+    # A successful `reset --hard` still leaves an empty working tree if the
+    # checkout was broken. Never report a refresh we cannot see the result of.
+    tracked = subprocess.run(
+        ["git", "-C", str(target), "ls-files"],
+        check=False, capture_output=True, text=True, timeout=60,
+    ).stdout.split()
+    present = [p for p in tracked if (target / p).exists()]
+    if tracked and not present:
+        logger.warning(
+            f"{target}: reset reported success but no tracked files are present; "
+            "treating as unusable so it gets re-cloned."
+        )
+        return False
+
+    return True
 
 
 def clone_repo(repo_link: str) -> str:

@@ -105,14 +105,38 @@ class TestCloneRepo:
             repo_parser.clone_repo("https://github.com/o/r")
 
     def test_existing_clone_is_reused_without_cloning_again(self, monkeypatch, tmp_path):
-        """An existing checkout is fast-forwarded, not re-cloned."""
-        (tmp_path / "data" / "o-r").mkdir(parents=True)
+        """An existing checkout is fast-forwarded, not re-cloned.
+
+        The directory must be a real clone: _refresh_clone refuses anything
+        that is not self-contained, because `git -C` would otherwise walk up
+        and operate on a parent repository.
+        """
+        real_run = subprocess.run
+
+        source = tmp_path / "source"
+        source.mkdir()
+        real_run(["git", "init", "-q", str(source)], check=True)
+        real_run(["git", "-C", str(source), "config", "user.email", "t@e.com"], check=True)
+        real_run(["git", "-C", str(source), "config", "user.name", "t"], check=True)
+        (source / "a.py").write_text("X = 1\n")
+        real_run(["git", "-C", str(source), "add", "."], check=True)
+        real_run(["git", "-C", str(source), "commit", "-q", "-m", "i"], check=True)
+
+        target = repo_parser.CLONES_DIR / "o-r"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        real_run(["git", "clone", "--depth", "1", str(source), str(target)],
+                 check=True, capture_output=True)
+
         calls = []
 
-        def record(cmd, **k):
+        def record(cmd, **kw):
             calls.append(cmd)
-            if "rev-parse" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, stdout="main\n", stderr="")
+            if "--show-toplevel" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=str(target) + "\n", stderr="")
+            if "rev-parse" in cmd and "--abbrev-ref" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="master\n", stderr="")
+            if "ls-files" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout="a.py\n", stderr="")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(repo_parser.subprocess, "run", record)
@@ -120,7 +144,7 @@ class TestCloneRepo:
         result = repo_parser.clone_repo("https://github.com/o/r")
 
         assert result.endswith(os.path.join("data", "o-r"))
-        assert any("clone" in c for c in calls) is False, calls
+        assert not any("clone" in c for c in calls), calls
         assert any("fetch" in c for c in calls), calls
 
     def test_unusable_clone_is_discarded_and_re_cloned(self, monkeypatch, tmp_path):

@@ -118,6 +118,16 @@ def map_repository(repo_url: str, on_progress: ProgressCallback | None = None):
     file_count = len(files)
     logger.info(f"Repository fetched: {repo_id} — {file_count} files")
 
+    if file_count == 0:
+        # Zero files means the checkout is broken (empty working tree, wrong
+        # ref, or a repo with no Python in it). Previously this fell through
+        # and reported success, leaving whatever graph was already in Neo4j on
+        # screen — so a broken clone looked exactly like a working index.
+        raise RuntimeError(
+            "No Python files found in the repository checkout. The clone may be "
+            "empty or on an unexpected ref; delete src/data and try again."
+        )
+
     qdrant_collection_name = f"repo_{repo_id}"
     qdrant_exists = VectorStore.collection_exists(qdrant_collection_name)
     if qdrant_exists and not VectorStore.is_index_complete(qdrant_collection_name):
