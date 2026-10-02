@@ -59,25 +59,36 @@ def _format_history(history: list) -> str:
 
 
 class AnswerEngine:
+    # Kept as one named constant rather than an inline literal inside
+    # generate_response, so any second call path (e.g. streaming) reuses the
+    # same instructions instead of drifting into a second, subtly different
+    # prompt.
+    SYSTEM = """
+        You are a code repository assistant.
+        Answer only from the provided context.
+        Use conversation history to resolve follow-up references (e.g. "it", "that function").
+        When asked about initial or default values, prioritize code that
+        constructs or initializes objects (e.g. GraphState(...), __init__,
+        initial_state) over code that updates or transitions values.
+        Name the source files you used inline, like `path/to/file.py`.
+        Report a confidence score between 0 and 1.
+    """
+
     def __init__(self, llm):
         self.llm = llm.with_structured_output(ResponseModel)
 
+    def _messages(self, query: str, context: str, history_text: str = ""):
+        history_block = f"\n\nConversation history:\n{history_text}" if history_text else ""
+        return [
+            ("system", self.SYSTEM),
+            ("user", "Context:\n{context}" + history_block + "\n\nQuestion: {query}"),
+        ]
+
     def generate_response(self, query: str, context: str, history_text: str = ""):
         history_block = f"\n\nConversation history:\n{history_text}" if history_text else ""
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """
-                You are a code repository assistant.
-                Answer only from the provided context.
-                Use conversation history to resolve follow-up references (e.g. "it", "that function").
-                When asked about initial or default values, prioritize code that
-                constructs or initializes objects (e.g. GraphState(...), __init__,
-                initial_state) over code that updates or transitions values.
-                Sources should be file names used to answer.
-                Confidence should be between 0 and 1.
-            """),
-            ("user", "Context:\n{context}{history_block}\n\nQuestion: {query}"),
-        ])
-        chain = prompt | self.llm
+        chain = ChatPromptTemplate.from_messages(
+            self._messages(query, context, history_text)
+        ) | self.llm
         return chain.invoke({
             "context": context,
             "history_block": history_block,

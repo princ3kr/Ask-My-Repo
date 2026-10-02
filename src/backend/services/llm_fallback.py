@@ -11,23 +11,35 @@ load_dotenv()
 
 logger = logging.getLogger('askmyrepo.llm')
 
-# OpenAI error types we catch for fallback
+# OpenAI error types we catch for fallback. Matched as substrings against the
+# exception message and its class name, so each entry has to be specific enough
+# not to fire on unrelated failures.
+#
+# "token" was in this list and is deliberately not: it matched "token limit",
+# "max_tokens exceeded" and every other message mentioning tokens, so ordinary
+# request-shape errors silently started spending the Groq key. Bare "exceeded"
+# and "credit" were equally over-broad. Nor is "context length" here — Groq's
+# window is smaller, so failing over on an overflow can only fail again. This
+# list is restricted to availability and authorisation failures, which is where
+# a second provider can actually help.
 OPENAI_FAILURE_KEYWORDS = [
+    # availability / capacity
     "insufficient_quota",
+    "quota",
+    "rate limit",
     "rate_limit",
-    "exceeded",
-    "capacity",
-    "429",
-    "503",
+    "overloaded",
+    "server had an error",
+    "server error",
+    "server_error",
+    "service unavailable",
+    # authentication / billing
     "api key",
     "authentication",
     "unauthorized",
     "deactivated",
     "billing",
-    "credit",
-    "expired",
-    "token",
-    "server error",
+    "credit balance",
 ]
 
 
@@ -63,8 +75,18 @@ class FallbackChatModel:
             timeout=30.0,
         )
         self._groq = None
-        self._fallback_used = False
+        # Monotonic, not a boolean. This was reset to False at the start of
+        # every invoke(), so a request where only the router fell back reported
+        # "no fallback" to the API, because the last call (the synthesizer) had
+        # succeeded on OpenAI. The instance is per-session and requests are
+        # sequential, so a counter cannot interleave.
+        self._fallback_count = 0
         self._last_error = None
+
+    @property
+    def _fallback_used(self) -> bool:
+        """True if *any* call on this instance ever fell back."""
+        return self._fallback_count > 0
 
     @property
     def groq(self):
@@ -93,7 +115,6 @@ class FallbackChatModel:
 
     def _invoke_with_fallback(self, primary_fn, fallback_fn, inputs, kwargs):
         try:
-            self._fallback_used = False
             return primary_fn(inputs, **kwargs)
         except Exception as e:
             self._last_error = e
@@ -110,7 +131,7 @@ class FallbackChatModel:
 
             if _is_openai_failure(e):
                 logger.warning("[FALLBACK] Switching to Groq (llama-3.3-70b-versatile)...")
-                self._fallback_used = True
+                self._fallback_count += 1
                 try:
                     return fallback_fn(inputs, **kwargs)
                 except Exception as e2:
@@ -127,8 +148,14 @@ class FallbackChatModel:
                 raise
 
     def __getattr__(self, name):
-        """Delegate any unimplemented attributes to the active LLM."""
-        if name in ('_fallback_used', '_last_error', '_groq', 'openai', 'groq', 'with_structured_output', 'invoke', '_invoke_with_fallback', 'load_dotenv'):
+        """Delegate any unimplemented attributes to the active LLM.
+
+        Only reached when normal lookup fails, so this just has to avoid
+        recursing back into self for the attributes defined on the class.
+        """
+        if name.startswith("_") or name in (
+            "openai", "groq", "with_structured_output", "invoke",
+        ):
             raise AttributeError(name)
         return getattr(self.groq if self._fallback_used else self.openai, name)
 
@@ -148,7 +175,6 @@ class FallbackStructuredOutput:
 
     def invoke(self, inputs, **kwargs):
         try:
-            self.parent._fallback_used = False
             return self.openai_runnable.invoke(inputs, **kwargs)
         except Exception as e:
             self.parent._last_error = e
@@ -165,7 +191,7 @@ class FallbackStructuredOutput:
 
             if _is_openai_failure(e):
                 logger.warning("[FALLBACK] Switching to Groq structured output (llama-3.3-70b-versatile)...")
-                self.parent._fallback_used = True
+                self.parent._fallback_count += 1
                 try:
                     if self.groq_runnable is None:
                         self.groq_runnable = self.parent.groq.with_structured_output(

@@ -120,6 +120,20 @@ def map_repository(repo_url: str, on_progress: ProgressCallback | None = None):
 
     qdrant_collection_name = f"repo_{repo_id}"
     qdrant_exists = VectorStore.collection_exists(qdrant_collection_name)
+    if qdrant_exists and not VectorStore.is_index_complete(qdrant_collection_name):
+        # A push that died partway still leaves a collection that
+        # collection_exists() reports as True. Trusting that meant every
+        # subsequent parse skipped the rebuild and every answer came back with
+        # missing context.
+        have = VectorStore.point_count(qdrant_collection_name)
+        logger.warning(
+            f"[INCOMPLETE INDEX] {qdrant_collection_name} has {have} points but no "
+            f"completion marker — the previous push was interrupted. Rebuilding."
+        )
+        # Kept below the 22% that the graph stage reports next, so the
+        # progress bar does not walk backwards.
+        report("vector_building", 20, "Previous index was incomplete — rebuilding search index…")
+        qdrant_exists = False
     neo4j_exists = ChunkBuilder.repo_exists(repo_id)
 
     if qdrant_exists and neo4j_exists:

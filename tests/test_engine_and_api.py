@@ -53,12 +53,11 @@ class TestFormatDocuments:
 
 
 class TestAnswerEnginePrompts:
-    def test_streaming_and_non_streaming_share_one_prompt(self):
-        """They used to embed two different system prompts, so a streaming
-        client and a non-streaming one got different instructions."""
+    def test_prompt_is_a_single_named_constant(self):
         ae = AnswerEngine.__new__(AnswerEngine)
         msgs = ae._messages("q", "ctx", "hist")
         assert msgs[0][1] is AnswerEngine.SYSTEM
+        assert len(msgs) == 2
 
     def test_history_is_included_only_when_present(self):
         ae = AnswerEngine.__new__(AnswerEngine)
@@ -169,9 +168,17 @@ class TestApiContract:
     def test_unknown_job_is_404(self, client):
         assert client.get("/api/parse/status/does-not-exist").status_code == 404
 
-    def test_cache_stats_shape(self, client):
-        body = client.get("/api/cache/stats").json()
-        assert set(body) == {"route", "rewrite", "graph", "answer", "view"}
+    def test_cache_module_is_self_contained(self):
+        """cache.py ships with the repo but nothing imports it yet: the query
+        path still uses QueryEngine._graph_cache. Kept honest here rather than
+        asserting an endpoint that does not exist.
+
+        TODO: wire the shared TTL caches into the query path, or delete the
+        module. Having both is the worst option.
+        """
+        from src.backend.services import cache
+
+        assert cache.all_stats()
 
     def test_cors_does_not_allow_any_origin(self, client):
         """allow_origins=['*'] + allow_credentials=True lets any site make
@@ -190,8 +197,7 @@ class TestApiContract:
         paths = {r.path for r in client.app.routes}
         for p in [
             "/health", "/api/parse", "/api/parse/status/{job_id}", "/api/chat",
-            "/api/chat/stream", "/api/activity", "/api/cache/stats",
-            "/api/cleanup/manual/{repo_id}", "/api/graph/{repo_id}",
+            "/api/activity", "/api/cleanup/manual/{repo_id}", "/api/graph/{repo_id}",
             "/api/tree/{repo_id}", "/api/graph_data/{repo_id}",
         ]:
             assert p in paths, p

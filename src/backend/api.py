@@ -6,19 +6,25 @@ import time
 import traceback
 import uuid
 
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 load_dotenv()
 
 from src.backend.chat_engine.engine import ChatWorkflow
-from src.backend.chunking.repo_parser import get_filename, get_files, normalize_repo_url
-from src.backend.job_status import create_job, get_job, job_to_dict, update_job
+from src.backend.chunking.repo_parser import (
+    get_filename, get_files, normalize_repo_url, NOTEBOOK_DIR,
+)
+from src.backend.job_status import (
+    create_job, get_job, job_to_dict, update_job, stop_all_jobs,
+)
 from src.backend.map.mapper import map_repository
 from src.backend.services.llm_fallback import FallbackChatModel
 from src.backend.services.repo_activity import activity_tracker
@@ -60,11 +66,49 @@ mapper_logger = logging.getLogger("askmyrepo.mapper")
 
 # ═══════════════════════════════════════════════════════════
 
-app = FastAPI(title="Ask My repo API")
+active_engines: dict[str, ChatWorkflow] = {}
+session_histories: dict[str, list[dict[str, str]]] = {}
+repo_files_cache: dict[str, dict] = {}
+MAX_HISTORY_TURNS = 16
+
+
+def _engine_key(repo_id: str, session_id: str) -> str:
+    return f"{repo_id}:{session_id}"
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the background cleanup task, and wind down cleanly on shutdown.
+
+    Replaces @app.on_event("startup"), which FastAPI has deprecated.
+    """
+    logger.info("Server starting up — initializing activity tracker...")
+    activity_tracker.start_cleanup_task(
+        engine_cache=active_engines, history_store=session_histories
+    )
+    logger.info("Server ready")
+    yield
+    stop_all_jobs()
+    activity_tracker.stop_cleanup_task()
+
+
+app = FastAPI(title="Ask My repo API", lifespan=lifespan)
+
+# Starlette answers allow_origins=["*"] together with allow_credentials=True by
+# echoing the request Origin and sending Access-Control-Allow-Credentials:
+# true — i.e. any site on the internet may make credentialed cross-origin
+# calls to this API. Name the real origins instead; override with CORS_ORIGINS.
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -97,37 +141,27 @@ async def log_requests(request: Request, call_next):
         logger.error(f"[{request_id}]   Message: {e}")
         for line in traceback.format_exc().splitlines():
             logger.error(f"[{request_id}]   {line}")
-        return HTMLResponse(
+        # The traceback used to be returned to the client inside an
+        # HTMLResponse. That leaked absolute paths, library versions and
+        # configuration details to anyone who could reach the API, and
+        # interpolating exception text into HTML unescaped was a reflected-XSS
+        # sink. It also broke the frontend, which calls res.json() on this and
+        # swallowed the failure — the graph view sat on "Loading graph data..."
+        # with no error. Log the detail, return JSON.
+        return JSONResponse(
             status_code=500,
-            content=f'<html><body><h1>500 Internal Server Error</h1><pre>{traceback.format_exc()}</pre></body></html>',
+            content={"detail": "Internal server error. Check the server logs."},
         )
-
-
-active_engines: dict[str, ChatWorkflow] = {}
-session_histories: dict[str, list[dict[str, str]]] = {}
-repo_files_cache: dict[str, dict] = {}
-MAX_HISTORY_TURNS = 16
-
-
-def _engine_key(repo_id: str, session_id: str) -> str:
-    return f"{repo_id}:{session_id}"
-
-
-@app.on_event("startup")
-def startup_event():
-    """Start the background cleanup task on API startup."""
-    logger.info("Server starting up — initializing activity tracker...")
-    activity_tracker.start_cleanup_task(
-        engine_cache=active_engines, history_store=session_histories
-    )
-    logger.info("Server ready on port 8000")
 
 
 def friendly_error(message: str, details: str = "") -> str:
     lower = message.lower()
     if "allocate memory" in lower or "onnxruntime" in lower:
         return "This repository is very large and ran out of memory while indexing. Try a smaller repo."
-    if "git" in lower and ("clone" in lower or "failed" in lower or "not found" in lower):
+    if "could not derive a repository name" in lower:
+        return "That doesn't look like a valid repository URL."
+    if "git" in lower and ("clone" in lower or "failed" in lower or "not found" in lower
+                           or "authentication" in lower or "not on path" in lower):
         return "We couldn't download that repository. Please double-check the URL."
     if "neo4j" in lower:
         return "Couldn't save the code map. Check that your database connection is set up."
@@ -214,6 +248,39 @@ def _run_parse_job(job_id: str, repo_url: str) -> None:
         update_job(
             job_id, stage="error", status="error", message=msg, error=msg
         )
+
+
+@app.get("/health")
+def health():
+    """Liveness probe. Also reports whether both backends are reachable.
+
+    Without this, an unreachable Neo4j or Qdrant only surfaced as an opaque
+    parse error some minutes into a run.
+    """
+    from neo4j import GraphDatabase
+    from qdrant_client import QdrantClient
+
+    status = {"status": "ok", "neo4j": None, "qdrant": None}
+    try:
+        GraphDatabase.driver(
+            os.getenv("NEO4J_URI"),
+            auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASS")),
+        ).verify_connectivity()
+        status["neo4j"] = "up"
+    except Exception as e:
+        status["neo4j"] = f"down: {type(e).__name__}: {e}"
+        status["status"] = "degraded"
+    try:
+        QdrantClient(
+            url=os.getenv("QDRANT_END_POINT"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=10,
+        ).get_collections()
+        status["qdrant"] = "up"
+    except Exception as e:
+        status["qdrant"] = f"down: {type(e).__name__}: {e}"
+        status["status"] = "degraded"
+    return status
 
 
 @app.post("/api/parse")
@@ -379,11 +446,12 @@ def manual_cleanup(repo_id: str):
         history_store=session_histories,
     )
 
-    notebook_dir = os.path.join(os.getcwd(), "notebook")
+    notebook_dir = str(NOTEBOOK_DIR)
     per_repo_path = os.path.join(notebook_dir, f"{repo_id}_graph.html")
     generic_path = os.path.join(notebook_dir, "graph.html")
     graph_cache_cleared = {"per_repo": False, "generic": False}
     try:
+        NOTEBOOK_DIR.mkdir(parents=True, exist_ok=True)
         if os.path.exists(per_repo_path):
             os.remove(per_repo_path)
             graph_cache_cleared["per_repo"] = True
@@ -410,7 +478,7 @@ def manual_cleanup(repo_id: str):
 @app.get("/api/graph/{repo_id}")
 def get_graph(repo_id: str):
     """Return the previously saved pyvis HTML for a repo, if present."""
-    notebook_dir = os.path.join(os.getcwd(), "notebook")
+    notebook_dir = str(NOTEBOOK_DIR)
     per_repo = os.path.join(notebook_dir, f"{repo_id}_graph.html")
     generic = os.path.join(notebook_dir, "graph.html")
 
