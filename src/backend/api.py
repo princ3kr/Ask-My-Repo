@@ -6,6 +6,7 @@ import time
 import traceback
 import uuid
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -196,18 +197,55 @@ def _get_or_create_engine(repo_id: str, session_id: str, repo_url: str) -> ChatW
 
     engine_logger.info(f"Creating new engine: {key}")
 
-    if repo_id not in repo_files_cache:
-        engine_logger.info(f"Fetching/parsing files for repo: {repo_id}")
-        repo_files_cache[repo_id] = get_files(repo_url)
-    else:
-        engine_logger.debug(f"Using cached files for repo: {repo_id}")
-
-    files = repo_files_cache[repo_id]
     llm = FallbackChatModel()
+    # `files` is only read by VectorStore.build(), which runs during indexing,
+    # not during chat. Passing a lazy mapping means the clone-and-parse is
+    # never triggered by opening a session -- it was costing a full clone on
+    # the first request against each repo, then being discarded unused.
+    files = _LazyRepoFiles(repo_id, repo_url)
     engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
     active_engines[key] = engine
     engine_logger.info(f"Engine created: {key} (model: {llm.model_name})")
     return engine
+
+
+class _LazyRepoFiles(Mapping):
+    """Parses the repository the first time someone actually iterates it.
+
+    Chat never needs the file inventory -- retrieval goes to Neo4j and Qdrant,
+    both already indexed. Only `VectorStore.build()` reads this mapping, and
+    that happens during indexing. Deferring the parse keeps a clone off the
+    request path without changing what an indexing run sees.
+
+    Subclasses Mapping rather than returning a plain dict from a property so
+    that `isinstance(files, dict)` checks elsewhere keep behaving, and so the
+    value cannot be mutated by a caller expecting a fresh dict.
+    """
+
+    def __init__(self, repo_id: str, repo_url: str):
+        self._repo_id = repo_id
+        self._repo_url = repo_url
+        self._loaded: dict | None = None
+
+    def _load(self) -> dict:
+        if self._loaded is None:
+            logger.info(f"Parsing files for repo (deferred): {self._repo_id}")
+            self._loaded = get_files(self._repo_url)
+            repo_files_cache[self._repo_id] = self._loaded
+        return self._loaded
+
+    def __getitem__(self, key):
+        return self._load()[key]
+
+    def __iter__(self):
+        return iter(self._load())
+
+    def __len__(self):
+        return len(self._load())
+
+    def __repr__(self) -> str:
+        state = "parsed" if self._loaded is not None else "deferred"
+        return f"<LazyRepoFiles {self._repo_id} ({state})>"
 
 
 def _run_parse_job(job_id: str, repo_url: str) -> None:
@@ -536,7 +574,7 @@ def get_graph_data(repo_id: str):
             nodes_query = """
             MATCH (n {repo_id: $repo_id})
             WHERE ANY(label IN labels(n) WHERE label IN ['File', 'Class', 'Function'])
-            RETURN id(n) as id, labels(n)[0] as type, n
+            RETURN elementId(n) as id, labels(n)[0] as type, n
             """
             nodes_res = session.run(nodes_query, repo_id=repo_id)
             nodes = []
@@ -559,7 +597,7 @@ def get_graph_data(repo_id: str):
             edges_query = """
             MATCH (a {repo_id: $repo_id})-[r]->(b {repo_id: $repo_id})
             WHERE type(r) IN ['IMPORTS', 'CALLS', 'INHERITS_FROM', 'INSTANTIATES']
-            RETURN id(r) as id, id(a) as source, id(b) as target, type(r) as type
+            RETURN elementId(r) as id, elementId(a) as source, elementId(b) as target, type(r) as type
             """
             edges_res = session.run(edges_query, repo_id=repo_id)
             edges = []

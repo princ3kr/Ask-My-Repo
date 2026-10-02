@@ -537,6 +537,80 @@ class TestVerifyGate:
 
 
 # ── tier assignment ─────────────────────────────────────────────────────────
+class TestLazyRepoFiles:
+    """Chat never reads the file inventory, so opening a session must not clone
+    and parse the repository to produce one."""
+
+    def _lazy(self, calls):
+        from src.backend import api
+
+        api.get_files = lambda url: (calls.append(url), {"a.py": {}})[1]
+        api.repo_files_cache.clear()
+        return api._LazyRepoFiles("r", "https://example.com/r.git")
+
+    def test_constructing_does_not_parse(self, monkeypatch):
+        calls = []
+        lazy = self._lazy(calls)
+        assert calls == []
+        assert "deferred" in repr(lazy)
+
+    def test_first_iteration_parses_once(self, monkeypatch):
+        calls = []
+        lazy = self._lazy(calls)
+        list(lazy)
+        list(lazy)
+        len(lazy)
+        lazy["a.py"]
+        assert calls == ["https://example.com/r.git"]
+
+    def test_behaves_like_the_mapping_it_wraps(self, monkeypatch):
+        from src.backend import api
+
+        api.get_files = lambda url: {"a.py": {"content": "x"}, "b.py": {}}
+        api.repo_files_cache.clear()
+        lazy = api._LazyRepoFiles("r", "u")
+        assert set(lazy) == {"a.py", "b.py"}
+        assert len(lazy) == 2
+        assert lazy["a.py"] == {"content": "x"}
+        assert "a.py" in lazy
+        assert list(lazy.items()) == [("a.py", {"content": "x"}), ("b.py", {})]
+
+    def test_parse_result_lands_in_the_shared_cache(self, monkeypatch):
+        """Indexing reads the cache directly, so a deferred parse must publish
+        there or the work is repeated."""
+        from src.backend import api
+
+        api.get_files = lambda url: {"a.py": {}}
+        api.repo_files_cache.clear()
+        lazy = api._LazyRepoFiles("r", "u")
+        list(lazy)
+        assert api.repo_files_cache["r"] == {"a.py": {}}
+
+    def test_chat_engine_construction_does_not_trigger_a_clone(self, monkeypatch):
+        from src.backend import api
+
+        clones = []
+        api.get_files = lambda url: clones.append(url) or {}
+        api.repo_files_cache.clear()
+        api.active_engines.clear()
+
+        class _FakeLLM:
+            model_name = "fake"
+
+            def with_structured_output(self, _):
+                return self
+
+        api.FallbackChatModel = _FakeLLM
+        api.ChatWorkflow = lambda repo_id, files, llm: {"files": files}
+        api._get_or_create_engine("r", "s", "https://example.com/r.git")
+        assert clones == [], "engine construction cloned the repo"
+
+        # And it is still available to whoever needs it.
+        engine = api.active_engines[api._engine_key("r", "s")]
+        assert list(engine["files"]) == []
+        assert len(clones) == 1
+
+
 class TestModelBinding:
     """A `dspy.Predict` with no `lm` of its own resolves `dspy.settings.lm` at
     call time. Setting a global default therefore does *not* implement per-step
