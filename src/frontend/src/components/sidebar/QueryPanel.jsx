@@ -21,7 +21,14 @@ function ChatHistory({ messages, isTyping, expandedReason, toggleReason, message
     }
 
     return (
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        // role="log" + aria-live so the answer is actually announced;
+        // without it, everything appeared silently to screen-reader users.
+        <div
+            className="flex-1 overflow-y-auto p-3 space-y-3"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+        >
             {messages.filter(m => !m.isStatus).map((msg) => (
                 <div key={msg.id} className={clsx("flex gap-2.5", msg.role === 'user' && 'flex-row-reverse')}>
                     <div className={clsx(
@@ -79,19 +86,31 @@ function ChatHistory({ messages, isTyping, expandedReason, toggleReason, message
     );
 }
 
-export default function QueryPanel({ onSend, isParsing, isParsed, isTyping, messages, expandedReason, toggleReason, messagesEndRef, repoUrl, handleNewSession, stats }) {
+// Only mounted once a repo is indexed (see App.jsx), so the isParsed check that
+// used to be threaded in as a prop is unconditionally true here.
+export default function QueryPanel({ onSend, isTyping, messages, expandedReason, toggleReason, messagesEndRef, stats }) {
     const [input, setInput] = useState('');
 
     const handleSend = () => {
-        if (!input.trim() || !isParsed || isTyping) return;
+        if (!input.trim() || isTyping) return;
         onSend(input);
         setInput('');
     };
 
+    // Sent directly. The old version set the input, waited 50ms, then called
+    // onSend — which left the box still filled with the suggestion text, kept
+    // an un-cleared timer, and happily sent while isTyping (where handleSend
+    // early-returns, silently dropping the question).
     const handleSuggestion = (s) => {
-        setInput(s);
-        setTimeout(() => onSend(s), 50);
+        if (isTyping) return;
+        setInput('');
+        onSend(s);
     };
+
+    // Status messages ("Connect x", "Done! I've learned...") are appended
+    // before this panel mounts, so counting raw messages meant the "Try asking"
+    // block could never render.
+    const realMessageCount = messages.filter((m) => !m.isStatus).length;
 
     return (
         <div className="flex flex-col h-full overflow-hidden">
@@ -111,6 +130,7 @@ export default function QueryPanel({ onSend, isParsing, isParsed, isTyping, mess
                     <textarea
                         className="w-full h-20 glass-panel-light rounded-lg p-3 text-sm text-text-color placeholder-text-dim resize-none outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/20 transition-all"
                         placeholder="Ask about your repository..."
+                        aria-label="Ask about your repository"
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -122,7 +142,8 @@ export default function QueryPanel({ onSend, isParsing, isParsed, isTyping, mess
                     />
                     <button
                         onClick={handleSend}
-                        disabled={!input.trim() || !isParsed || isTyping}
+                        disabled={!input.trim() || isTyping}
+                        aria-label="Send question"
                         className="absolute bottom-3 right-3 w-7 h-7 rounded-md bg-accent/20 text-accent flex items-center justify-center hover:bg-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <Send size={13} />
@@ -130,8 +151,8 @@ export default function QueryPanel({ onSend, isParsing, isParsed, isTyping, mess
                 </div>
             </div>
 
-            {/* Suggestions when empty */}
-            {messages.length === 0 && (
+            {/* Suggestions while no real question has been asked yet */}
+            {realMessageCount === 0 && (
                 <div className="px-3 pb-2 shrink-0">
                     <div className="text-[10px] font-semibold text-text-dim uppercase tracking-wider mb-2 px-1">Try asking</div>
                     <div className="space-y-1.5">

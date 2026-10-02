@@ -71,9 +71,6 @@ function barycenterReorder(nodesByLevel, outgoing, incoming) {
 function buildTreeLayout(graphNodes, graphEdges) {
     if (!graphNodes || graphNodes.length === 0) return [];
 
-    const nodeMap = {};
-    graphNodes.forEach(n => { nodeMap[n.id] = n; });
-
     const incomingCount = {};
     const outgoing = {};
     const incoming = {};
@@ -96,19 +93,26 @@ function buildTreeLayout(graphNodes, graphEdges) {
         roots = graphNodes.filter(n => incomingCount[n.id] === minIncoming);
     }
 
+    // BFS shortest-path from the roots. A level may only ever be *filled in*:
+    // the previous version also re-relaxed an already-visited node whenever a
+    // "longer" path turned up, which is unbounded relaxation and never
+    // terminates inside a cycle. /api/graph_data returns IMPORTS edges between
+    // files, and circular imports are ordinary in Python, so a 2-node cycle
+    // (a.py imports b.py, b.py imports a.py) was enough to hang the tab at
+    // 100% CPU with unbounded memory growth. Each node is enqueued at most
+    // once here, and the index cursor keeps the walk O(1) per step instead of
+    // the O(n) shift() it replaces.
     const level = {};
     const queue = [];
     roots.forEach(r => {
         level[r.id] = 0;
         queue.push(r.id);
     });
-    while (queue.length > 0) {
-        const id = queue.shift();
-        const currentLevel = level[id];
+    for (let head = 0; head < queue.length; head++) {
+        const id = queue[head];
         for (const targetId of (outgoing[id] || [])) {
-            const newLevel = currentLevel + 1;
-            if (level[targetId] === undefined || newLevel > level[targetId]) {
-                level[targetId] = newLevel;
+            if (level[targetId] === undefined) {
+                level[targetId] = level[id] + 1;
                 queue.push(targetId);
             }
         }
@@ -203,7 +207,7 @@ function applyGrouping(nodes) {
     return [...groupNodes, ...childNodes, ...ungrouped];
 }
 
-function GraphController({ onNodeClick, selectedNodeId, onReady }) {
+function GraphController({ selectedNodeId, onReady }) {
     const { fitView, getNodes } = useReactFlow();
 
     useEffect(() => {
@@ -221,10 +225,6 @@ function GraphController({ onNodeClick, selectedNodeId, onReady }) {
             });
         }
     }, [fitView, getNodes, onReady]);
-
-    const onNodeClickHandler = useCallback((event, node) => {
-        if (onNodeClick) onNodeClick(node);
-    }, [onNodeClick]);
 
     useEffect(() => {
         if (selectedNodeId) {
@@ -334,13 +334,21 @@ function GraphLegend({ visible, onToggle }) {
     );
 }
 
-const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeClick, selectedNodeId, selectedFilePath }, ref) {
+const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeClick, selectedNodeId }, ref) {
     const [legendOpen, setLegendOpen] = React.useState(true);
 
+    // The selected flag is folded into the same memo as the layout. It used to
+    // be a second effect mapping every node to a fresh object, which
+    // invalidated all of them and forced React Flow to re-measure the whole
+    // canvas for a change that only affects one node.
     const groupedNodes = useMemo(() => {
         const laidOut = buildTreeLayout(graphData?.nodes, graphData?.edges);
-        return applyGrouping(laidOut);
-    }, [graphData]);
+        return applyGrouping(laidOut).map((n) => (
+            n.type === 'groupNode'
+                ? n
+                : { ...n, data: { ...n.data, selected: n.id === selectedNodeId } }
+        ));
+    }, [graphData, selectedNodeId]);
 
     const [nodes, setNodes, onNodesChange] = useNodesState(groupedNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -378,13 +386,6 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
         }
     }, [graphData, groupedNodes, setNodes, setEdges]);
 
-    useEffect(() => {
-        setNodes(nds => nds.map(n => ({
-            ...n,
-            data: { ...n.data, selected: n.id === selectedNodeId },
-        })));
-    }, [selectedNodeId, setNodes]);
-
     useImperativeHandle(ref, () => ({
         fitViewForNode: (filePath) => {
             if (controllerRef.current) {
@@ -393,13 +394,19 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
         },
     }), []);
 
+    // The ref is owned by useImperativeHandle above; onReady used to also
+    // assign ref.current, clobbering that handle with the controller object.
     const onReady = useCallback((ctrl) => {
         controllerRef.current = ctrl;
-        if (ref) {
-            if (typeof ref === 'function') ref(ctrl);
-            else ref.current = ctrl;
-        }
-    }, [ref]);
+    }, []);
+
+    // Wired straight onto <ReactFlow>. This previously lived in
+    // GraphController, which renders null, so it was never called and clicking
+    // a node did nothing — the NodeDetails panel and terminal were
+    // unreachable by user action.
+    const handleNodeClick = useCallback((event, node) => {
+        if (onNodeClick) onNodeClick(node);
+    }, [onNodeClick]);
 
     const defaultEdgeOptions = useMemo(() => ({
         type: 'smoothstep',
@@ -414,15 +421,16 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
+                onNodeClick={handleNodeClick}
                 nodeTypes={allNodeTypes}
                 fitView
                 defaultEdgeOptions={defaultEdgeOptions}
                 minZoom={0.1}
                 maxZoom={3}
                 className="bg-background"
+                onlyRenderVisibleElements
             >
                 <GraphController
-                    onNodeClick={onNodeClick}
                     selectedNodeId={selectedNodeId}
                     onReady={onReady}
                 />

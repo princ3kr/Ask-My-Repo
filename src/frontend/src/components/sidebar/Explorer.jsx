@@ -10,22 +10,28 @@ function getFileIcon(filename) {
     return <File size={13} className="text-gray-400" />;
 }
 
+// Folders and files are <button> rather than clickable <div>s: the tree is
+// the Explorer's entire purpose and it was previously unreachable by keyboard
+// or screen reader (no role, no tabIndex, no key handler, no aria-expanded).
 function TreeFolder({ name, children, defaultOpen = false, level = 0 }) {
     const [isOpen, setIsOpen] = useState(defaultOpen);
 
     return (
-        <div>
-            <div
-                className="tree-item group"
+        <div role="none">
+            <button
+                type="button"
+                role="treeitem"
+                aria-expanded={isOpen}
+                className="tree-item group w-full text-left"
                 onClick={() => setIsOpen(!isOpen)}
                 style={{ paddingLeft: `${8 + level * 12}px` }}
             >
                 {isOpen ? <ChevronDown size={12} className="text-text-dim shrink-0" /> : <ChevronRight size={12} className="text-text-dim shrink-0" />}
                 {isOpen ? <FolderOpen size={13} className="text-text-dim shrink-0" /> : <Folder size={13} className="text-text-dim shrink-0" />}
                 <span className="truncate text-xs">{name}</span>
-            </div>
+            </button>
             {isOpen && (
-                <div>
+                <div role="group">
                     {children}
                 </div>
             )}
@@ -33,11 +39,14 @@ function TreeFolder({ name, children, defaultOpen = false, level = 0 }) {
     );
 }
 
-function TreeFile({ name, isActive, onClick, level = 0 }) {
+function TreeFile({ name, isActive, onClick, level = 0, showFullPath = false }) {
     return (
-        <div
+        <button
+            type="button"
+            role="treeitem"
+            aria-selected={!!isActive}
             className={clsx(
-                "tree-item group text-xs",
+                "tree-item group text-xs w-full text-left",
                 isActive && "bg-accent/10 text-accent border-l-2 border-accent"
             )}
             style={{ paddingLeft: `${8 + level * 12}px` }}
@@ -45,22 +54,27 @@ function TreeFile({ name, isActive, onClick, level = 0 }) {
         >
             <span className="w-[12px] shrink-0"></span>
             {getFileIcon(name)}
-            <span className={clsx("truncate", isActive && "text-accent font-medium")}>{name}</span>
-        </div>
+            <span className={clsx("truncate", showFullPath && "font-mono text-[10px]", isActive && "text-accent font-medium")}>{name}</span>
+        </button>
     );
 }
 
+// Leaves carry their full repo-relative path. The renderer previously passed
+// only the leaf segment, which App.handleFileSelect had to match against
+// `n.data.label` (the basename) — so two files with the same name in different
+// directories selected whichever node Neo4j happened to return first, and the
+// `endsWith` highlight matched unrelated siblings.
 function buildTree(paths) {
     const tree = {};
-    paths.forEach(path => {
+    paths.forEach((path) => {
         const parts = path.split(/[\\/]/);
         let current = tree;
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
             if (i === parts.length - 1) {
-                current[part] = null;
+                current[part] = { __isFile: true, __path: path };
             } else {
-                if (!current[part] || typeof current[part] !== 'object') current[part] = {};
+                if (!current[part] || current[part].__isFile) current[part] = {};
                 current = current[part];
             }
         }
@@ -70,10 +84,15 @@ function buildTree(paths) {
 
 function renderTree(node, level, selectedFilePath, onFileSelect) {
     return Object.entries(node).map(([key, value]) => {
-        if (value === null) {
-            const isActive = selectedFilePath && (selectedFilePath.endsWith(key) || selectedFilePath === key);
+        if (value && value.__isFile) {
             return (
-                <TreeFile key={key} name={key} isActive={isActive} onClick={() => onFileSelect?.(key)} level={level} />
+                <TreeFile
+                    key={value.__path}
+                    name={key}
+                    isActive={selectedFilePath === value.__path}
+                    onClick={() => onFileSelect?.(value.__path)}
+                    level={level}
+                />
             );
         }
         return (
@@ -87,8 +106,6 @@ function renderTree(node, level, selectedFilePath, onFileSelect) {
 export default function Explorer({ treePaths = [], stats = {}, selectedFilePath, onFileSelect }) {
     const [searchQuery, setSearchQuery] = useState('');
 
-    const tree = useMemo(() => buildTree(treePaths), [treePaths]);
-
     const filteredPaths = useMemo(() => {
         if (!searchQuery.trim()) return treePaths;
         const q = searchQuery.toLowerCase();
@@ -96,6 +113,7 @@ export default function Explorer({ treePaths = [], stats = {}, selectedFilePath,
     }, [treePaths, searchQuery]);
 
     const filteredTree = useMemo(() => buildTree(filteredPaths), [filteredPaths]);
+    const isSearching = Boolean(searchQuery.trim());
 
     return (
         <div className="flex flex-col h-full overflow-hidden">
@@ -124,6 +142,7 @@ export default function Explorer({ treePaths = [], stats = {}, selectedFilePath,
                     <input
                         type="text"
                         placeholder="Filter files..."
+                        aria-label="Filter files"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="w-full glass-panel-light rounded-md py-1.5 pl-7 pr-2 text-xs text-text-color placeholder-text-dim outline-none focus:border-accent/40 transition-colors"
@@ -132,25 +151,36 @@ export default function Explorer({ treePaths = [], stats = {}, selectedFilePath,
             </div>
 
             {/* Tree */}
-            <div className="flex-1 overflow-y-auto py-1">
+            <div className="flex-1 overflow-y-auto py-1" role="tree" aria-label="Repository files">
                 {Object.keys(filteredTree).length > 0 ? (
-                    searchQuery ? (
-                        renderTree(filteredTree, 0, selectedFilePath, onFileSelect)
+                    isSearching ? (
+                        // Flat list in search mode. Rebuilding the nested tree
+                        // left every folder at depth >= 2 collapsed
+                        // (defaultOpen={level < 2}), so a match buried under
+                        // src/backend/chunking/ was invisible while the panel
+                        // still claimed results existed.
+                        <div className="px-1">
+                            {filteredPaths.map((path) => (
+                                <TreeFile
+                                    key={path}
+                                    name={path}
+                                    isActive={selectedFilePath === path}
+                                    onClick={() => onFileSelect?.(path)}
+                                    level={0}
+                                    showFullPath
+                                />
+                            ))}
+                        </div>
                     ) : (
-                        Object.entries(filteredTree).map(([key, value]) => {
-                            if (value === null) {
-                                return <TreeFile key={key} name={key} isActive={selectedFilePath === key} onClick={() => onFileSelect?.(key)} level={0} />;
-                            }
-                            return (
-                                <div key={key}>
-                                    {renderTree({ [key]: value }, 0, selectedFilePath, onFileSelect)}
-                                </div>
-                            );
-                        })
+                        Object.entries(filteredTree).map(([key, value]) => (
+                            <div key={key}>
+                                {renderTree({ [key]: value }, 0, selectedFilePath, onFileSelect)}
+                            </div>
+                        ))
                     )
                 ) : (
                     <div className="text-center text-xs text-text-dim mt-8">
-                        {searchQuery ? 'No matching files' : 'No files found.'}
+                        {isSearching ? 'No matching files' : 'No files found.'}
                     </div>
                 )}
             </div>

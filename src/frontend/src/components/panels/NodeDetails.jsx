@@ -1,28 +1,40 @@
 import React, { useState, useMemo } from 'react';
-import { Info, Box, FileCode, Target, Network, GitBranch, ArrowRight, ArrowLeft, List, Code2 } from 'lucide-react';
+import { Box, FileCode, Target, Network, ArrowRight, ArrowLeft, Code2 } from 'lucide-react';
 import clsx from 'clsx';
 
 const TABS = ['Properties', 'Relations', 'Code'];
 
+// Allow-list rather than deny-list. A deny-list leaked internal plumbing
+// (repo_id, entry_confidence, the raw Neo4j elementId) into a user-facing
+// panel the moment the backend added a property.
+const VISIBLE_PROPERTIES = new Set([
+    'label', 'nodeType', 'path', 'name', 'qualified_name', 'class_name',
+    'bases', 'line_start', 'line_end', 'is_entry', 'entry_kind', 'module', 'alias',
+]);
+
 export default function NodeDetails({ node, graphData }) {
     const [activeTab, setActiveTab] = useState('Properties');
+
+    // Hooks must run on every render, so both memos are declared before the
+    // early return and tolerate a null node. Returning first (as this used to)
+    // changes the hook count between renders and crashes React as soon as a
+    // caller lets `node` actually be null.
+    const nodeId = node?.id;
+    const incomingEdges = useMemo(() => {
+        if (!graphData?.edges || !nodeId) return [];
+        return graphData.edges.filter(e => e.target === nodeId);
+    }, [graphData, nodeId]);
+
+    const outgoingEdges = useMemo(() => {
+        if (!graphData?.edges || !nodeId) return [];
+        return graphData.edges.filter(e => e.source === nodeId);
+    }, [graphData, nodeId]);
 
     if (!node) {
         return null;
     }
 
-    const { label, nodeType, path, classes, functions, imports, is_entry, entry_kind, name, qualified_name, line_start, line_end } = node.data || {};
-
-    // Find incoming and outgoing edges
-    const incomingEdges = useMemo(() => {
-        if (!graphData?.edges) return [];
-        return graphData.edges.filter(e => e.target === node.id);
-    }, [graphData, node.id]);
-
-    const outgoingEdges = useMemo(() => {
-        if (!graphData?.edges) return [];
-        return graphData.edges.filter(e => e.source === node.id);
-    }, [graphData, node.id]);
+    const { label, nodeType, path, classes, functions, imports, is_entry, line_start, line_end } = node.data || {};
 
     const findNodeById = (id) => graphData?.nodes?.find(n => n.id === id);
 
@@ -92,11 +104,13 @@ export default function NodeDetails({ node, graphData }) {
 
                         {/* Properties */}
                         <div className="space-y-1">
-                            {node.data && Object.entries(node.data).filter(([k]) => !['label', 'nodeType', 'functions', 'classes', 'imports', 'selected'].includes(k)).map(([key, val]) => (
+                            {Object.entries(node.data)
+                                .filter(([k, v]) => VISIBLE_PROPERTIES.has(k) && v !== null && v !== undefined && v !== '')
+                                .map(([key, val]) => (
                                 <div key={key} className="flex items-center gap-2 text-[11px]">
                                     <span className="text-text-dim font-mono min-w-[80px]">{key.replace(/_/g, ' ')}</span>
                                     <span className="text-text-color truncate font-mono">
-                                        {Array.isArray(val) ? val.join(', ') : String(val ?? '-')}
+                                        {Array.isArray(val) ? val.join(', ') : String(val)}
                                     </span>
                                 </div>
                             ))}
@@ -115,10 +129,10 @@ export default function NodeDetails({ node, graphData }) {
                                 <p className="text-[11px] text-text-dim italic">No incoming relations</p>
                             ) : (
                                 <div className="space-y-1">
-                                    {incomingEdges.map((edge, i) => {
+                                    {incomingEdges.map((edge) => {
                                         const sourceNode = findNodeById(edge.source);
                                         return (
-                                            <div key={i} className="flex items-center gap-2 text-[11px] glass-panel-light rounded-lg px-2.5 py-1.5">
+                                            <div key={edge.id} className="flex items-center gap-2 text-[11px] glass-panel-light rounded-lg px-2.5 py-1.5">
                                                 <span className="text-text-color font-medium truncate max-w-[100px]">{sourceNode?.data?.label || edge.source}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
                                                 <span className={clsx(
@@ -146,10 +160,10 @@ export default function NodeDetails({ node, graphData }) {
                                 <p className="text-[11px] text-text-dim italic">No outgoing relations</p>
                             ) : (
                                 <div className="space-y-1">
-                                    {outgoingEdges.map((edge, i) => {
+                                    {outgoingEdges.map((edge) => {
                                         const targetNode = findNodeById(edge.target);
                                         return (
-                                            <div key={i} className="flex items-center gap-2 text-[11px] bg-surface border border-surface-muted rounded-lg px-2.5 py-1.5 backdrop-blur-md">
+                                            <div key={edge.id} className="flex items-center gap-2 text-[11px] bg-surface border border-surface-muted rounded-lg px-2.5 py-1.5 backdrop-blur-md">
                                                 <span className="text-text-color font-medium truncate max-w-[100px]">{label}</span>
                                                 <ArrowRight size={10} className="text-text-dim shrink-0" />
                                                 <span className={clsx(
@@ -187,8 +201,8 @@ export default function NodeDetails({ node, graphData }) {
                             <div>
                                 <h4 className="text-[10px] font-semibold text-blue-400 mb-1">Classes</h4>
                                 <div className="flex flex-wrap gap-1">
-                                    {classes.map((c, i) => (
-                                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 font-mono">{c}</span>
+                                    {classes.map((c) => (
+                                        <span key={c} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/20 font-mono">{c}</span>
                                     ))}
                                 </div>
                             </div>
@@ -198,8 +212,8 @@ export default function NodeDetails({ node, graphData }) {
                             <div>
                                 <h4 className="text-[10px] font-semibold text-purple-400 mb-1">Functions</h4>
                                 <div className="flex flex-wrap gap-1">
-                                    {functions.map((f, i) => (
-                                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20 font-mono">{f}</span>
+                                    {functions.map((f) => (
+                                        <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20 font-mono">{f}</span>
                                     ))}
                                 </div>
                             </div>
@@ -209,8 +223,8 @@ export default function NodeDetails({ node, graphData }) {
                             <div>
                                 <h4 className="text-[10px] font-semibold text-indigo-400 mb-1">Imports</h4>
                                 <div className="flex flex-wrap gap-1">
-                                    {imports.map((imp, i) => (
-                                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono">{imp}</span>
+                                    {imports.map((imp) => (
+                                        <span key={imp} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-mono">{imp}</span>
                                     ))}
                                 </div>
                             </div>
