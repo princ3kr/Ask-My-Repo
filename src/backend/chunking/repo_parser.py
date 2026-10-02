@@ -1,6 +1,6 @@
-import subprocess
-import os
 import ast
+import os
+import subprocess
 from urllib.parse import urlparse
 
 ignores = { ".git", ".gitignore", ".lock", ".venv", "__pycache__", "node_modules", ".vscode", "pyproject.toml", ".python-version", "requirements.txt" }

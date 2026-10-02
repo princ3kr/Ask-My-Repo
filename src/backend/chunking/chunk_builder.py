@@ -1,9 +1,10 @@
-import networkx as nx
-from pyvis.network import Network
-from neo4j import GraphDatabase
 import json
 import os
+
+import networkx as nx
 from dotenv import load_dotenv
+from neo4j import GraphDatabase
+from pyvis.network import Network
 
 load_dotenv()
 

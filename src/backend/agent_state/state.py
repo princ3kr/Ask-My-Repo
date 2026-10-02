@@ -1,5 +1,7 @@
 from typing import Literal, TypedDict
-from langchain_core.messages import HumanMessage, AIMessage
+
+from langchain_core.messages import AIMessage, HumanMessage
+
 
 class GraphResult(TypedDict):
     is_fallback: bool

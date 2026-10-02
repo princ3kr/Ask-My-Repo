@@ -1,10 +1,10 @@
 import os
-import numpy as np
 import uuid
-from dotenv import load_dotenv 
+
+import numpy as np
+from dotenv import load_dotenv
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchAny
-from langchain_openai import ChatOpenAI
+from qdrant_client.models import FieldCondition, Filter, MatchAny
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()

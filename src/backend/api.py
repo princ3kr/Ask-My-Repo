@@ -1,26 +1,27 @@
 # pyrefly: ignore [missing-import]
+import logging
+import os
+import threading
+import time
+import traceback
+import uuid
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
-from dotenv import load_dotenv
-import threading
-import os
-import time
-import uuid
-import logging
-import traceback
 
 load_dotenv()
 
 from src.backend.chat_engine.engine import ChatWorkflow
-from src.backend.chunking.repo_parser import get_files, get_filename, normalize_repo_url
+from src.backend.chunking.repo_parser import get_filename, get_files, normalize_repo_url
+from src.backend.job_status import create_job, get_job, job_to_dict, update_job
 from src.backend.map.mapper import map_repository
-from src.backend.job_status import create_job, update_job, get_job, job_to_dict
-from src.backend.services.repo_activity import activity_tracker
 from src.backend.services.llm_fallback import FallbackChatModel
+from src.backend.services.repo_activity import activity_tracker
 
 # ═══════════════════════════════════════════════════════════
 # LOGGING CONFIGURATION
@@ -102,9 +103,9 @@ async def log_requests(request: Request, call_next):
         )
 
 
-active_engines: Dict[str, ChatWorkflow] = {}
-session_histories: Dict[str, List[Dict[str, str]]] = {}
-repo_files_cache: Dict[str, dict] = {}
+active_engines: dict[str, ChatWorkflow] = {}
+session_histories: dict[str, list[dict[str, str]]] = {}
+repo_files_cache: dict[str, dict] = {}
 MAX_HISTORY_TURNS = 16
 
 
@@ -320,7 +321,7 @@ def chat(request: ChatRequest):
             "rewritten_query": result.get("rewritten_query", ""),
         }
     except Exception as e:
-        chat_logger.error(f"Chat workflow failed:")
+        chat_logger.error("Chat workflow failed:")
         chat_logger.error(f"  Type: {type(e).__name__}")
         chat_logger.error(f"  Message: {e}")
         for line in traceback.format_exc().splitlines():
@@ -332,8 +333,8 @@ def chat(request: ChatRequest):
 def get_activity_status():
     """Get current activity log and cleanup configuration."""
     from src.backend.services.repo_activity import (
-        INACTIVITY_TIMEOUT_HOURS,
         CLEANUP_CHECK_INTERVAL_MINUTES,
+        INACTIVITY_TIMEOUT_HOURS,
     )
 
     activity_log = {}
@@ -432,8 +433,9 @@ def get_graph(repo_id: str):
 
 @app.get("/api/tree/{repo_id}")
 def get_tree(repo_id: str):
-    from src.backend.chunking.chunk_builder import URI, USER, PASSWORD
     from neo4j import GraphDatabase
+
+    from src.backend.chunking.chunk_builder import PASSWORD, URI, USER
 
     driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
     try:
@@ -454,8 +456,9 @@ def get_tree(repo_id: str):
 
 @app.get("/api/graph_data/{repo_id}")
 def get_graph_data(repo_id: str):
-    from src.backend.chunking.chunk_builder import URI, USER, PASSWORD
     from neo4j import GraphDatabase
+
+    from src.backend.chunking.chunk_builder import PASSWORD, URI, USER
 
     driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
     try:

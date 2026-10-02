@@ -1,6 +1,6 @@
-import os
 import sys
 import uuid
+
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 from dotenv import load_dotenv
@@ -8,8 +8,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from langchain_openai import ChatOpenAI
+
 from src.backend.chat_engine.engine import ChatWorkflow
-from src.backend.chunking.repo_parser import get_files, get_filename
+from src.backend.chunking.repo_parser import get_filename, get_files
+
 
 def run_chat_cli(repo_url: str):
     repo_id = get_filename(repo_url)

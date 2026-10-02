@@ -4,8 +4,7 @@ Logs all errors, failures, and fallbacks to terminal with full stack traces.
 """
 import logging
 import traceback
-import sys
-import time
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -101,16 +100,16 @@ class FallbackChatModel:
             exc_type = type(e).__name__
             exc_msg = str(e)
             logger.error("=" * 60)
-            logger.error(f"[OPENAI FAILURE] Model: gpt-4o")
+            logger.error("[OPENAI FAILURE] Model: gpt-4o")
             logger.error(f"[OPENAI FAILURE] Type: {exc_type}")
             logger.error(f"[OPENAI FAILURE] Message: {exc_msg}")
-            logger.error(f"[OPENAI FAILURE] Traceback:")
+            logger.error("[OPENAI FAILURE] Traceback:")
             for line in traceback.format_exc().splitlines():
                 logger.error(f"  {line}")
             logger.error("-" * 60)
 
             if _is_openai_failure(e):
-                logger.warning(f"[FALLBACK] Switching to Groq (llama-3.3-70b-versatile)...")
+                logger.warning("[FALLBACK] Switching to Groq (llama-3.3-70b-versatile)...")
                 self._fallback_used = True
                 try:
                     return fallback_fn(inputs, **kwargs)
@@ -156,16 +155,16 @@ class FallbackStructuredOutput:
             exc_type = type(e).__name__
             exc_msg = str(e)
             logger.error("=" * 60)
-            logger.error(f"[OPENAI STRUCTURED FAILURE] Model: gpt-4o")
+            logger.error("[OPENAI STRUCTURED FAILURE] Model: gpt-4o")
             logger.error(f"[OPENAI STRUCTURED FAILURE] Type: {exc_type}")
             logger.error(f"[OPENAI STRUCTURED FAILURE] Message: {exc_msg}")
-            logger.error(f"[OPENAI STRUCTURED FAILURE] Traceback:")
+            logger.error("[OPENAI STRUCTURED FAILURE] Traceback:")
             for line in traceback.format_exc().splitlines():
                 logger.error(f"  {line}")
             logger.error("-" * 60)
 
             if _is_openai_failure(e):
-                logger.warning(f"[FALLBACK] Switching to Groq structured output (llama-3.3-70b-versatile)...")
+                logger.warning("[FALLBACK] Switching to Groq structured output (llama-3.3-70b-versatile)...")
                 self.parent._fallback_used = True
                 try:
                     if self.groq_runnable is None:

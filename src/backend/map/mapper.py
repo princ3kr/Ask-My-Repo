@@ -1,14 +1,14 @@
-import sys
 import logging
+import sys
 import traceback
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
-from src.backend.chunking.repo_parser import get_files, get_filename
 from src.backend.chunking.chunk_builder import ChunkBuilder
-from src.backend.services.vector_db import VectorStore
+from src.backend.chunking.repo_parser import get_filename, get_files
 from src.backend.services.llm_fallback import FallbackChatModel
+from src.backend.services.vector_db import VectorStore
 
 ProgressCallback = Callable[[str, int, str], None]
 logger = logging.getLogger("askmyrepo.mapper")
@@ -97,7 +97,7 @@ FILES:
         logger.info(f"LLM entry point review: {len(merged)} entries confirmed from {len(flagged_paths)} candidates")
         return merged
     except Exception as e:
-        logger.error(f"Entry point LLM review failed:")
+        logger.error("Entry point LLM review failed:")
         logger.error(f"  Type: {type(e).__name__}")
         logger.error(f"  Message: {e}")
         for line in traceback.format_exc().splitlines():
@@ -105,7 +105,7 @@ FILES:
         return []
 
 
-def map_repository(repo_url: str, on_progress: Optional[ProgressCallback] = None):
+def map_repository(repo_url: str, on_progress: ProgressCallback | None = None):
     def report(stage: str, progress: int, message: str):
         if on_progress:
             on_progress(stage, progress, message)

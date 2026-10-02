@@ -1,13 +1,13 @@
+import logging
 import os
 import re
 import time
-import logging
 import traceback
-from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from fuzzywuzzy import fuzz, process
 from neo4j import GraphDatabase
-from fuzzywuzzy import process, fuzz
-from qdrant_client.models import Filter, FieldCondition, MatchAny
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("askmyrepo.query_engine")
 
@@ -183,7 +183,7 @@ class QueryEngine:
             """,
         }
 
-    def _match_template(self, query: str) -> Optional[tuple[str, dict]]:
+    def _match_template(self, query: str) -> tuple[str, dict] | None:
         match = re.search(
             r'(?:which\s+)?files?\s+(?:does?\s+)?(\w+\.py)\s+(?:indirectly\s+)?depend(?:s|ency)?\s+on\s+through\s+(\w+\.py)',
             query.lower()
@@ -447,7 +447,7 @@ class QueryEngine:
             return output
 
         except Exception as e:
-            logger.error(f"[Error] Graph query failed:")
+            logger.error("[Error] Graph query failed:")
             logger.error(f"  Query: {query}")
             logger.error(f"  Generated Cypher: {response.cypher}")
             logger.error(f"  Exception: {type(e).__name__}: {e}")
@@ -503,18 +503,18 @@ class QueryEngine:
         graph_result = self._validate_graph_result(graph_result, query)
 
         if not self._is_meaningful(graph_result):
-            logger.debug(f"[Fallback] Graph result not meaningful, using entity extraction")
+            logger.debug("[Fallback] Graph result not meaningful, using entity extraction")
             return self.extract_entities_from_query(query)
 
         filenames = self._extract_filenames(graph_result["data"])
 
         if graph_result.get("is_incomplete"):
-            logger.debug(f"[Augmentation] Graph result incomplete, augmenting with entity extraction")
+            logger.debug("[Augmentation] Graph result incomplete, augmenting with entity extraction")
             entity_files = self.extract_entities_from_query(query)
             filenames = list(set(filenames) | set(entity_files))
 
         if not filenames:
-            logger.debug(f"[Fallback] No filenames extracted, using entity extraction")
+            logger.debug("[Fallback] No filenames extracted, using entity extraction")
             return self.extract_entities_from_query(query)
 
         logger.debug(f"[Validation] Extracted {len(filenames)} files from graph: {filenames[:3]}...")

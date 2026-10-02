@@ -1,7 +1,8 @@
 import threading
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -11,11 +12,11 @@ class JobStatus:
     progress: int = 0
     message: str = "Getting things ready…"
     status: str = "running"
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
 
 
-_jobs: Dict[str, JobStatus] = {}
+_jobs: dict[str, JobStatus] = {}
 _lock = threading.Lock()
 
 ProgressCallback = Callable[..., None]
@@ -31,12 +32,12 @@ def create_job() -> str:
 def update_job(
     job_id: str,
     *,
-    stage: Optional[str] = None,
-    progress: Optional[int] = None,
-    message: Optional[str] = None,
-    status: Optional[str] = None,
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
+    stage: str | None = None,
+    progress: int | None = None,
+    message: str | None = None,
+    status: str | None = None,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
 ) -> None:
     with _lock:
         job = _jobs.get(job_id)
@@ -56,7 +57,7 @@ def update_job(
             job.error = error
 
 
-def get_job(job_id: str) -> Optional[JobStatus]:
+def get_job(job_id: str) -> JobStatus | None:
     with _lock:
         job = _jobs.get(job_id)
         if not job:
@@ -72,8 +73,8 @@ def get_job(job_id: str) -> Optional[JobStatus]:
         )
 
 
-def job_to_dict(job: JobStatus) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
+def job_to_dict(job: JobStatus) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "job_id": job.job_id,
         "stage": job.stage,
         "progress": job.progress,

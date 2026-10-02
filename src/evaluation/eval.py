@@ -1,10 +1,11 @@
 import sys
+
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
-from pathlib import Path
 import time
-import math
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,18 +13,20 @@ load_dotenv()
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from ragas import evaluate
-from langchain_openai import ChatOpenAI
-from ragas.metrics import (
-    faithfulness,
-    answer_relevancy,
-    answer_correctness,
-    context_precision,
-    context_recall
-)
-from ragas.llms import LangchainLLMWrapper
-from datasets import Dataset
 import json
+
+from datasets import Dataset
+from langchain_openai import ChatOpenAI
+from ragas import evaluate
+from ragas.llms import LangchainLLMWrapper
+from ragas.metrics import (
+    answer_correctness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+    faithfulness,
+)
+
 from src.backend.chat_engine.engine import ChatWorkflow
 from src.backend.chunking.repo_parser import get_filename
 
@@ -70,7 +73,7 @@ def process_sample(sample):
                 "ground_truth": sample["ground_truth"]
             }
         except Exception as e:
-            print(f"[Error] Failed query '{sample['question']}': {str(e)}")
+            print(f"[Error] Failed query '{sample['question']}': {e!s}")
             if attempt < max_retries - 1:
                 print(f"[*] Retrying query in 2s ({attempt + 2}/{max_retries})...")
                 time.sleep(2)

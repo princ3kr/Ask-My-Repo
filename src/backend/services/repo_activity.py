@@ -1,8 +1,8 @@
 import os
 import threading
 import time
-import heapq
 from datetime import datetime, timedelta
+
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from qdrant_client import QdrantClient
@@ -165,7 +165,7 @@ class RepoActivityTracker:
 
     def _cleanup_loop(self) -> None:
         """Background thread loop that periodically checks and cleans up inactive repos."""
-        print(f"[Cleanup] Initialized connections to Neo4j and Qdrant.")
+        print("[Cleanup] Initialized connections to Neo4j and Qdrant.")
         self._init_connections()
         
         while self.running:
