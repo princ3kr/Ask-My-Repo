@@ -17,11 +17,23 @@ the only thing that actually overlaps them.
 from __future__ import annotations
 
 import logging
+import os
 from concurrent.futures import Future, ThreadPoolExecutor
 
 logger = logging.getLogger("askmyrepo.speculate")
 
 _POOL: ThreadPoolExecutor | None = None
+
+
+def speculation_enabled() -> bool:
+    """`ASK_NO_SPECULATE=1` forces every call to run inline.
+
+    Both clients are synchronous and neither is documented as thread-safe, so
+    this is the switch to reach for if a deployment ever sees cross-request
+    interference. It also makes the latency win measurable, since the
+    benchmark toggles it rather than reasoning about it.
+    """
+    return os.getenv("ASK_NO_SPECULATE", "0") != "1"
 
 
 def pool() -> ThreadPoolExecutor:
@@ -36,10 +48,12 @@ def pool() -> ThreadPoolExecutor:
 def speculate(fn):
     """Start `fn` on a worker and return its Future.
 
-    Returns None if the pool could not take the work, so the caller can fall
-    back to running it inline. Speculation is an optimisation; it must never be
-    the reason a query fails.
+    Returns None if speculation is disabled or the pool could not take the work,
+    so the caller falls back to running it inline. Speculation is an
+    optimisation; it must never be the reason a query fails.
     """
+    if not speculation_enabled():
+        return None
     try:
         return pool().submit(fn)
     except Exception as e:

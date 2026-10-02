@@ -49,7 +49,12 @@ load_dotenv(ROOT / ".env")
 
 import dspy  # noqa: E402
 
-from src.backend.dspy_bridge.config import configure_lms  # noqa: E402
+from src.backend.dspy_bridge.config import (  # noqa: E402
+    STRONG_MODEL,
+    TIERS,
+    configure_lms,
+    model_for,
+)
 from src.backend.dspy_bridge.metrics import (  # noqa: E402
     structural_metric,
 )
@@ -80,6 +85,11 @@ def load_split(split: str) -> list[dspy.Example]:
 
 
 # ── executor for the objective metric ───────────────────────────────────────
+def _lm(name: str):
+    """One configured LM for a model name, independent of tier assignment."""
+    return configure_lms()[name]
+
+
 def execute_cypher(cypher: str, repo_id: str) -> list[str]:
     """Run a generated query and pull file paths out of the result.
 
@@ -150,7 +160,7 @@ def run_eval(program_name: str, split: str, tier: str) -> float:
     return score
 
 
-def run_optimize(program_name: str, split: str, tier: str, auto: str, budget: int) -> None:
+def run_optimize(program_name: str, split: str, tier: str, auto: str) -> None:
     configure_lms(tier)
     programs = build_programs()
     program = programs[program_name]
@@ -161,14 +171,17 @@ def run_optimize(program_name: str, split: str, tier: str, auto: str, budget: in
         return
 
     metric = structural_metric(execute_cypher)
-    strong = configure_lms("strong")[__import__(
-        "src.backend.dspy_bridge.config", fromlist=["STRONG_MODEL"]
-    ).STRONG_MODEL]
+
+    # The strong model proposes instruction candidates; the program is scored
+    # on the tier's own model. Proposing with the strong model is worth the
+    # tokens because candidate *quality* is what the search is really
+    # selecting on, and it costs far fewer calls than the trials would.
+    prompt_lm = _lm(STRONG_MODEL)
 
     optimizer = dspy.MIPROv2(
         metric=metric,
-        prompt_model=strong,      # propose prompts with the strong model...
-        task_model=strong,        # ...but the programme runs on the cheap one
+        prompt_model=prompt_lm,
+        task_model=_lm(model_for(program_name, tier)),
         auto=auto,
         max_bootstrapped_demos=4,
         max_labeled_demos=4,
@@ -177,7 +190,10 @@ def run_optimize(program_name: str, split: str, tier: str, auto: str, budget: in
         log_dir=str(SAVED_DIR / program_name),
     )
 
-    logger.info("optimising %r on %d examples (auto=%s)", program_name, len(examples), auto)
+    logger.info(
+        "optimising %r on %d examples (auto=%s, task model=%s)",
+        program_name, len(examples), auto, model_for(program_name, tier),
+    )
     optimizer.compile(program, trainset=examples, eval_kwargs={"num_threads": 4})
 
     SAVED_DIR.mkdir(parents=True, exist_ok=True)
@@ -187,6 +203,13 @@ def run_optimize(program_name: str, split: str, tier: str, auto: str, budget: in
 
 
 def run_replay(program_name: str, split: str, tier: str) -> float:
+    """Score a saved artifact against the held-out split.
+
+    This is the only number that matters: `optimize` reports the best score it
+    found *on the training split*, which is optimistically biased by
+    construction. Replaying on `test` is what says whether any of it
+    generalised.
+    """
     configure_lms(tier)
     path = SAVED_DIR / f"{program_name}.json"
     if not path.exists():
@@ -203,22 +226,30 @@ def main() -> int:
                     choices=["route", "rewrite", "cypher", "synthesize", "verify"])
     ap.add_argument("--mode", default="eval", choices=["eval", "optimize", "replay"])
     ap.add_argument("--split", default="train", choices=["train", "test"])
-    ap.add_argument("--tier", default=os.getenv("DSPY_TIER", "cheap"),
-                    choices=["cheap", "strong"])
+    ap.add_argument("--tier", default=None,
+                    choices=sorted(TIERS),
+                    help="Model assignment to evaluate. Default: $DSPY_OPT_TIER, "
+                         "else 'cheap'. Optimising on the cheap tier is "
+                         "deliberate: the artefact is prompts and demos, which "
+                         "are portable across models.")
     ap.add_argument("--auto", default="light", choices=["light", "medium", "heavy"])
-    ap.add_argument("--budget", type=int, default=200)
     args = ap.parse_args()
+
+    # Optimizing on the cheap model keeps the search cheap; the artefact is
+    # prompts and demos, which are portable across models. So default to the
+    # cheapest tier regardless of what serves traffic.
+    tier = args.tier or os.getenv("DSPY_OPT_TIER", "cheap")
 
     if not EVAL_SET.exists():
         logger.error("no eval set at %s — run build_eval_set.py first", EVAL_SET)
         return 1
 
     if args.mode == "eval":
-        run_eval(args.program, args.split, args.tier)
+        run_eval(args.program, args.split, tier)
     elif args.mode == "optimize":
-        run_optimize(args.program, args.split, args.tier, args.auto, args.budget)
+        run_optimize(args.program, args.split, tier, args.auto)
     else:
-        run_replay(args.program, args.split, args.tier)
+        run_replay(args.program, args.split, tier)
     return 0
 
 

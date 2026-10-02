@@ -358,6 +358,21 @@ class TestSpeculation:
         assert speculate.pool() is speculate.pool()
         assert speculate.pool()._max_workers == 2
 
+    def test_disable_flag_forces_inline(self, monkeypatch):
+        """The switch to reach if a deployment ever sees cross-request
+        interference, since neither client is documented as thread-safe."""
+        from src.backend.chat_engine import speculate
+
+        monkeypatch.setenv("ASK_NO_SPECULATE", "1")
+        assert speculate.speculation_enabled() is False
+        assert speculate.speculate(lambda: [1]) is None
+
+    def test_enabled_by_default(self, monkeypatch):
+        from src.backend.chat_engine import speculate
+
+        monkeypatch.delenv("ASK_NO_SPECULATE", raising=False)
+        assert speculate.speculation_enabled() is True
+
 
 # ── program shape ───────────────────────────────────────────────────────────
 class TestProgramShape:
