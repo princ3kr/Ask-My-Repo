@@ -475,9 +475,65 @@ class TestVerifyGate:
         eng = self._engine(True)
         eng.dspy.verify = lambda *a: ("unsupported", "none")
 
+        # No citations at all, so grounding is 0.0 and the verdict stands.
         answer, confidence = eng._verify_answer("q", "c", "answer", 0.2, 100)
         assert answer == "answer"
         assert confidence == 0.0
+
+    def test_grounded_answer_overrides_a_negative_verdict(self, monkeypatch):
+        """The false-accusation case, reproduced from a live run.
+
+        A short graph-only context, a correct list, and a verifier that called
+        it unsupported. Acting on that would degrade a right answer in front of
+        the user, so grounding arbitrates.
+        """
+        monkeypatch.setenv("ASK_DSPY", "1")
+        eng = self._engine(True)
+        eng.dspy.verify = lambda *a: (
+            "unsupported", "the claim that these files import X is unsupported"
+        )
+
+        context = (
+            "Record 1:\n  path: app.py\n"
+            "Record 2:\n  path: src/backend/api.py\n"
+            "Record 3:\n  path: src/backend/map/mapper.py\n"
+        )
+        question = "Which files import repo_parser.py?"
+        answer = "The files importing repo_parser.py are app.py, "
+        answer += "src/backend/api.py, and src/backend/map/mapper.py."
+
+        assert eng._verify_answer(question, context, answer, 0.4, len(context)) is None
+
+    def test_invented_answer_still_gets_the_caveat(self, monkeypatch):
+        """The override must not become a free pass for hallucination."""
+        monkeypatch.setenv("ASK_DSPY", "1")
+        eng = self._engine(True)
+        eng.dspy.verify = lambda *a: ("unsupported", "no such file in context")
+
+        context = "Record 1:\n  path: src/backend/services/cache.py\n"
+        answer = "This is implemented in src/backend/magic/teleporter.py."
+
+        out = eng._verify_answer("q", context, answer, 0.4, len(context))
+        assert out is not None
+        assert "teleporter" in out[0]
+        assert out[1] == 0.0
+
+    def test_hedged_answer_with_one_real_citation_still_flagged(self, monkeypatch):
+        """50% grounding is the threshold, so this sits exactly on the boundary
+        and must not be overridden -- inventing one path among several is still
+        inventing."""
+        monkeypatch.setenv("ASK_DSPY", "1")
+        eng = self._engine(True)
+        eng.dspy.verify = lambda *a: ("unsupported", "second file is not in context")
+
+        context = "path: src/backend/services/cache.py"
+        answer = "See src/backend/services/cache.py and src/backend/ghost.py."
+
+        # Question names cache.py, so grounding is 1/2 = 50%: below the
+        # override, so the invented path still gets flagged.
+        out = eng._verify_answer("What does cache.py do?", context, answer, 0.4, len(context))
+        assert out is not None
+        assert out[1] == 0.0
 
 
 # ── tier assignment ─────────────────────────────────────────────────────────

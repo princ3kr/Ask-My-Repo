@@ -16,6 +16,17 @@ from src.backend.services.vector_db import VectorStore
 
 logger = logging.getLogger("askmyrepo.engine")
 
+# How well an answer's citations must be grounded for a negative verification
+# verdict to be discarded as a false accusation.
+#
+# Strict, and strict on purpose. Grounding is a *precision* measure over cited
+# paths, so 0.5 means half the paths the answer names do not exist in the
+# retrieved context -- which is inventing, regardless of what the verifier
+# thinks. An answer that cites several real files and one invented one is
+# exactly the case this gate exists to catch, so a partial score must not
+# suppress the warning.
+_VERIFY_GROUNDING_OVERRIDE = 0.8
+
 
 class RouterDecision(BaseModel):
     decision: Literal['graph_only', 'hybrid', 'architecture'] = Field(
@@ -495,10 +506,21 @@ class ChatWorkflow:
     ) -> tuple[str, float] | None:
         """Return a corrected (answer, confidence), or None to keep the draft.
 
-        The verifier never rewrites prose. It only reports whether the answer is
-        supported, and a negative verdict lowers the confidence and appends the
-        gap — because an honest "not in the retrieved context" is more useful
-        to a reader than a confident invention with the same retrieval behind it.
+        The verifier never rewrites prose. It reports whether the answer is
+        supported, and a negative verdict appends the gap and zeroes the
+        confidence.
+
+        But the verifier is a cheap model, and it misjudges: on a correct
+        answer over a short graph-only context it reported "the claim that the
+        listed files import X is unsupported" — for a list that was exactly
+        right. A false accusation is worse than silence, because it degrades a
+        correct answer in front of the user.
+
+        So a negative verdict is only acted on when an *objective* check agrees.
+        Citation grounding measures how many of the answer's file paths actually
+        appear in the retrieved context; that requires no model and cannot be
+        talked into agreeing. A verdict contradicted by grounding is discarded
+        and logged, not surfaced.
         """
         if not self.dspy.enabled:
             return None
@@ -512,11 +534,27 @@ class ChatWorkflow:
         if label == "supported":
             logger.info("[verify] draft supported — keeping it")
             return None
+
+        from src.backend.dspy_bridge.metrics import citation_precision
+
+        # The question counts as grounded context: an answer that names the file
+        # the question was about is not inventing it, even when the retrieved
+        # records never mention that path. Without this, every well-formed
+        # answer to "which files import X" looks partly fabricated.
+        grounding = citation_precision(answer, f"{context}\n{query}")
+        if grounding >= _VERIFY_GROUNDING_OVERRIDE:
+            logger.warning(
+                "[verify] %s, but %.0f%% of cited paths are in the context — "
+                "discarding the verdict",
+                label, grounding * 100,
+            )
+            return None
+
         if not gap or gap.lower() == "none":
             logger.info("[verify] flagged %s with no specific gap", label)
             return answer, 0.0
 
-        logger.warning(f"[verify] {label}: {gap[:120]}")
+        logger.warning(f"[verify] {label} (grounding {grounding:.0%}): {gap[:120]}")
         disclaimer = (
             f"\n\n_Note: part of this could not be confirmed from the retrieved "
             f"context — {gap}._"
