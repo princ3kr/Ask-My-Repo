@@ -31,14 +31,6 @@ class CypherQuery(BaseModel):
     cypher: str = Field(..., description="Cypher query for retrieving relationships within the nodes")
 
 
-class RouterDecision(BaseModel):
-    decision: Literal['hybrid', 'graph_only'] = Field(
-        ...,
-        description="graph_only ONLY for pure structural/dependency/topology questions. hybrid for everything else."
-    )
-    reason: str = Field(default="Routed by QueryEngine", description="Brief explanation of the routing decision")
-
-
 class ArchitectSubtype(BaseModel):
     subtype: Literal['request_flow', 'system_overview', 'dependency_map', 'class_interaction', 'entry_call_chain'] = Field(
         ...,
@@ -65,7 +57,10 @@ class QueryEngine:
         self.graph_driver = GraphDatabase.driver(uri, auth=(user, password))
         logger.debug(f"QueryEngine initialized for repo: {repo_id}")
         self._file_index = None
-        self._router_cache: dict[str, RouterDecision] = {}
+        # Written and read by ChatWorkflow.router_node, not by this class.
+        # Typed loosely to avoid importing from chat_engine, which imports
+        # this module.
+        self._router_cache: dict = {}
         self._graph_cache: dict[str, dict | None] = {}
         self.query_templates = self._init_templates()
         self.architect_templates = self._init_architect_templates()
@@ -711,101 +706,6 @@ class QueryEngine:
 
         logger.debug("[fallback] Graph returned no meaningful data, using entity extraction")
         return self.extract_entities_from_query(query)
-
-    def router(self, query: str) -> RouterDecision:
-        if query in self._router_cache:
-            return self._router_cache[query]
-
-        router_llm = self.llm.with_structured_output(RouterDecision)
-        router_prompt = [
-            ("system", """You are a query router for code repository Q&A.
-                The knowledge graph stores: files, imports, classes, functions, methods, inheritance, call edges.
-                It has NO knowledge of variable values, runtime state, or full code behavior.
-
-                Classify into:
-
-                graph_only — answerable purely from code structure:
-                - which files import X
-                - what does <file> depend on
-                - where is a class/function/method defined
-                - which methods belong to a class
-                - which functions/methods call or instantiate another symbol
-                - which files have no imports
-                - which file has the most dependencies
-                - transitive dependencies of <file>
-                - what files depend on <file> (reverse lookup)
-
-                hybrid — everything else:
-                - what a function/method does internally or returns
-                - what happens when a condition be met
-                - initial / default value of anything
-                - how a feature is implemented
-                - what database / framework / library is used
-                - any question about runtime behavior, state, or logic
-
-                RULE: If mentioning specific variables/fields or asking about behavior → hybrid.
-                When in doubt, choose hybrid.
-            """),
-            ("user", f"query: {query}")
-        ]
-
-        from langchain_core.prompts import ChatPromptTemplate
-        prompt_template = ChatPromptTemplate.from_messages(router_prompt)
-        chain = prompt_template | router_llm
-        result = chain.invoke({"query": query})
-        self._router_cache[query] = result
-        return result
-
-    def get_result(self, query: str, top_k: int = 5):
-        route = self.router(query).decision
-        retrieve_k = top_k
-
-        def _pure_vector():
-            vector_data = self.db_client.search(query=query, top_k=retrieve_k)
-            return {
-                "type": "hybrid",
-                "graph": [],
-                "vector": self.rerank(vector_data, query, top_k),
-            }
-
-        if route == "graph_only":
-            graph_result = self.graph_search(query)
-
-            if graph_result is None:
-                return _pure_vector()
-
-            if self._is_meaningful(graph_result):
-                return {"type": "graph", "graph": graph_result["data"]}
-
-            filenames = self._extract_filenames_safe(graph_result, query)
-            if filenames:
-                vector_data = self.vector_search(query, filenames=filenames, top_k=retrieve_k)
-            else:
-                vector_data = self.db_client.search(query=query, top_k=retrieve_k)
-
-            return {
-                "type": "hybrid",
-                "graph": [],
-                "vector": self.rerank(vector_data, query, top_k),
-            }
-
-        else:
-            graph_result = self.graph_search(query)
-
-            if graph_result is None:
-                return _pure_vector()
-
-            filenames = self._extract_filenames_safe(graph_result, query)
-            if filenames:
-                vector_data = self.vector_search(query, filenames=filenames, top_k=retrieve_k)
-            else:
-                vector_data = self.db_client.search(query=query, top_k=retrieve_k)
-
-            return {
-                "type": "hybrid",
-                "graph": graph_result["data"] if graph_result else [],
-                "vector": self.rerank(vector_data, query, top_k),
-            }
 
     def close(self):
         self.graph_driver.close()

@@ -537,6 +537,70 @@ class TestVerifyGate:
 
 
 # ── tier assignment ─────────────────────────────────────────────────────────
+class TestRouterCache:
+    """`_router_cache` was written on every route and read by nothing, so the
+    router re-paid for an LLM call on any repeated question. Reading it turns a
+    write-only cache into the saving it looks like."""
+
+    def _workflow(self):
+        from src.backend.chat_engine.engine import ChatWorkflow
+
+        wf = ChatWorkflow.__new__(ChatWorkflow)
+        wf.query_engine = type("QE", (), {"_router_cache": {}})()
+        wf.dspy = type("D", (), {"enabled": False, "route": staticmethod(lambda q: None)})()
+        return wf
+
+    def _decision(self, decision, reason="because"):
+        from src.backend.chat_engine.engine import RouterDecision
+
+        return RouterDecision(decision=decision, reason=reason)
+
+    def test_cached_route_short_circuits_the_call(self, monkeypatch):
+        monkeypatch.delenv("ASK_DSPY", raising=False)
+        wf = self._workflow()
+        wf.query_engine._router_cache["q"] = self._decision("graph_only", "structural")
+
+        monkeypatch.setattr(
+            wf.dspy.__class__, "route", staticmethod(lambda q: pytest.fail("routed despite cache hit"))
+        )
+        out = wf.router_node({"user_query": "q"})
+        assert out["router_decision"] == "graph"
+        assert out["reason"] == "structural"
+
+    def test_cache_miss_consults_dspy(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY", "1")
+        wf = self._workflow()
+        wf.dspy.route = lambda q: ("hybrid", "dspy says so")
+        out = wf.router_node({"user_query": "q"})
+        assert out["router_decision"] == "hybrid"
+
+    def test_dspy_result_is_cached_under_the_shared_key(self, monkeypatch):
+        """Otherwise a repeat question is free only when the legacy path
+        happened to answer first."""
+        monkeypatch.setenv("ASK_DSPY", "1")
+        wf = self._workflow()
+        wf.dspy.route = lambda q: ("graph", "structural")
+        wf.router_node({"user_query": "q"})
+        assert wf.query_engine._router_cache["q"].decision == "graph_only"
+
+    def test_state_mapping_round_trips(self):
+        from src.backend.chat_engine.engine import _route_to_state, _state_to_route
+
+        for decision in ("graph_only", "hybrid", "architecture"):
+            assert _state_to_route(_route_to_state(decision)) == decision
+
+    def test_unknown_decision_falls_back_to_hybrid(self):
+        """The router's own prompt says to prefer hybrid when unsure."""
+        from src.backend.chat_engine.engine import _route_to_state
+
+        assert _route_to_state("something_else") == "hybrid"
+
+    def test_graph_node_is_reachable_from_state(self):
+        from src.backend.chat_engine.engine import _route_to_state
+
+        assert _route_to_state("graph_only") == "graph"
+
+
 class TestLazyRepoFiles:
     """Chat never reads the file inventory, so opening a session must not clone
     and parse the repository to produce one."""

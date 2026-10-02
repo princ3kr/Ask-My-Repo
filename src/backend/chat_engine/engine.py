@@ -40,6 +40,26 @@ class RouterDecision(BaseModel):
     reason: str = Field(..., description="Explanation of why this routing path was selected")
 
 
+def _route_to_state(decision: str) -> str:
+    """Map a router decision onto the value AgentState carries.
+
+    The model's label set and the graph's node names differ: `graph_only`
+    routes to the `graph` node. Both the cached and the fresh path go through
+    here, so the two cannot disagree.
+    """
+    return {
+        "architecture": "architecture",
+        "graph_only": "graph",
+        "graph": "graph",
+        "hybrid": "hybrid",
+    }.get(decision, "hybrid")
+
+
+def _state_to_route(decision: str) -> str:
+    """Inverse of _route_to_state, for writing a cached RouterDecision."""
+    return {"graph": "graph_only"}.get(decision, decision)
+
+
 class RewrittenQuery(BaseModel):
     rewritten_query: str = Field(
         ...,
@@ -165,12 +185,29 @@ class ChatWorkflow:
         query = state["user_query"]
         logger.debug(f"[router] Routing query: \"{query[:60]}...\"")
 
+        # The same query text routes the same way, and the cache below was
+        # already being written to by the non-DSPy path. Reading it turns a
+        # write-only cache into the saving it was presumably meant to be.
+        cached = self.query_engine._router_cache.get(query)
+        if cached is not None:
+            logger.debug("[router] Cache hit — skipping the call")
+            return {
+                "router_decision": _route_to_state(cached.decision),
+                "reason": cached.reason,
+                "current_agent": "router",
+            }
+
         try:
             dspy_result = self.dspy.route(query)
             if dspy_result is not None:
                 router_decision_val, reason = dspy_result
                 logger.info(
                     f"[router] dspy -> {router_decision_val} (reason: {reason[:80]})"
+                )
+                # Cache under the shared key so a repeat question is free
+                # whichever backend answered it the first time.
+                self.query_engine._router_cache[query] = RouterDecision(
+                    decision=_state_to_route(router_decision_val), reason=reason
                 )
                 return {
                     "router_decision": router_decision_val,
@@ -224,13 +261,7 @@ class ChatWorkflow:
 
             self.query_engine._router_cache[query] = res
 
-            if res.decision == "architecture":
-                router_decision_val = "architecture"
-            elif res.decision == "graph_only":
-                router_decision_val = "graph"
-            else:
-                router_decision_val = "hybrid"
-
+            router_decision_val = _route_to_state(res.decision)
             logger.info(f"[router] -> {router_decision_val} (reason: {res.reason[:80]})")
 
             return {
