@@ -18,6 +18,15 @@ VALID_FILE_PROPERTIES = {
 }
 
 
+def _strip_string_literals(cypher: str) -> str:
+    """Blank out quoted literals so keyword scanning cannot be fooled by them.
+
+    `MATCH (n {name: 'delete me'})` contains the word "delete" but is a read.
+    Replacing literals first means the write-clause check sees only real syntax.
+    """
+    return re.sub(r"'[^']*'|\"[^\"]*\"", "''", cypher)
+
+
 class CypherQuery(BaseModel):
     cypher: str = Field(..., description="Cypher query for retrieving relationships within the nodes")
 
@@ -115,22 +124,29 @@ class QueryEngine:
         }
 
     def _init_templates(self) -> dict:
+        # Every user-influenced value is a query *parameter*, never text. These
+        # used to be interpolated with str.format(), which made repo_id — derived
+        # from a user-supplied URL by get_filename() — a Cypher injection vector:
+        #   get_filename("https://github.com/a')-DETACH DELETE n//b")
+        #     -> "a')-DETACH DELETE n-"
+        # The architect templates in this same class were already parameterised;
+        # these were not.
         return {
             "multi_hop_imports": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH (source:File {{name: '{source}'}})-[:IMPORTS]->(via:File {{name: '{via}'}})
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH (source:File {name: $source})-[:IMPORTS]->(via:File {name: $via})
                 MATCH (via:File)-[:IMPORTS]->(target:File)
                 RETURN DISTINCT target.path as indirect_dependency
                 ORDER BY target.path
             """,
             "leaf_nodes": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})-[:CONTAINS]->(f:File)
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 WHERE NOT (f)-[:IMPORTS]->()
                 RETURN f.path as leaf_file
                 ORDER BY f.path
             """,
             "most_dependencies": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})-[:CONTAINS]->(f:File)
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 MATCH (f)-[:IMPORTS]->(deps:File)
                 WITH f, count(DISTINCT deps) as dep_count
                 ORDER BY dep_count DESC
@@ -138,26 +154,26 @@ class QueryEngine:
                 RETURN f.path as file, dep_count as dependency_count
             """,
             "direct_imports": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH (f:File {{name: '{filename}'}})-[:IMPORTS]->(imported:File)
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH (f:File {name: $filename})-[:IMPORTS]->(imported:File)
                 RETURN imported.path as imported_file
                 ORDER BY imported.path
             """,
             "reverse_lookup": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH (importer:File)-[:IMPORTS]->(target:File {{name: '{filename}'}})
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH (importer:File)-[:IMPORTS]->(target:File {name: $filename})
                 RETURN importer.path as file_that_imports
                 ORDER BY importer.path
             """,
             "transitive_dependencies": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH path=(source:File {{name: '{source}'}})-[:IMPORTS*1..3]->(target:File)
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH path=(source:File {name: $source})-[:IMPORTS*1..3]->(target:File)
                 WHERE source <> target
                 RETURN DISTINCT target.path as transitive_dep
                 ORDER BY target.path
             """,
             "file_structure": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})-[:CONTAINS]->(f:File {{name: '{filename}'}})
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File {name: $filename})
                 MATCH (f)-[:DEFINES_CLASS]->(c:Class)
                 MATCH (f)-[:DEFINES_FUNCTION]->(fn:Function)
                 RETURN f.path as file_path,
@@ -165,19 +181,19 @@ class QueryEngine:
                        collect(DISTINCT fn.name) as functions
             """,
             "call_graph": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH (caller:Function {{name: '{function_name}'}})-[:CALLS]->(callee:Function)
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH (caller:Function {name: $function_name})-[:CALLS]->(callee:Function)
                 RETURN callee.qualified_name as called_function
                 ORDER BY called_function
             """,
             "class_hierarchy": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})
-                MATCH (c:Class {{name: '{class_name}'}})-[:INHERITS_FROM]->(parent:Class)
+                MATCH (r:Repo {repo_id: $repo_id})
+                MATCH (c:Class {name: $class_name})-[:INHERITS_FROM]->(parent:Class)
                 RETURN parent.qualified_name as parent_class
                 ORDER BY parent_class
             """,
             "all_files": """
-                MATCH (r:Repo {{repo_id: '{repo_id}'}})-[:CONTAINS]->(f:File)
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 RETURN f.path as file_path
                 ORDER BY f.path
             """,
@@ -253,9 +269,7 @@ class QueryEngine:
     def _execute_architect_template(self, template_name: str) -> dict | None:
         try:
             cypher = self.architect_templates[template_name]
-            with self.graph_driver.session() as session:
-                result = session.run(cypher, repo_id=self.repo_id)
-                data = [record.data() for record in result]
+            data = self._run_read(cypher, {"repo_id": self.repo_id})
             logger.debug(f"[architect] Template '{template_name}': {len(data)} results")
             return {
                 "is_fallback": False, "data": data, "response": cypher,
@@ -318,12 +332,30 @@ class QueryEngine:
                 unique.append(p)
         return unique[:limit]
 
+    # Clauses that mutate the graph. The property allow-list in
+    # sanitize_cypher() only inspected `n.prop` accesses, so a generated query
+    # of `MATCH (n) DETACH DELETE n` sailed straight through. Every read path
+    # below also runs in an explicit READ transaction (see _run_read), so even
+    # if this list is bypassed the driver rejects the write.
+    WRITE_CLAUSES = (
+        "create", "delete", "detach", "set", "remove", "merge", "drop",
+        "foreach", "load", "call", "grant", "deny", "revoke", "start",
+    )
+
+    def _run_read(self, cypher: str, params: dict | None = None) -> list[dict]:
+        """Execute a read-only query and return plain dicts.
+
+        default_access_mode=READ makes the *driver* reject a write attempt, so a
+        gap in sanitize_cypher cannot turn into data loss.
+        """
+        with self.graph_driver.session(default_access_mode="READ") as session:
+            result = session.run(cypher, **(params or {}))
+            return [record.data() for record in result]
+
     def _execute_template(self, template_name: str, params: dict) -> dict | None:
         try:
-            cypher = self.query_templates[template_name].format(**params)
-            with self.graph_driver.session() as session:
-                result = session.run(cypher)
-                data = [record.data() for record in result]
+            cypher = self.query_templates[template_name]
+            data = self._run_read(cypher, params)
             return {
                 "is_fallback": False, "data": data, "response": cypher,
                 "method": "template", "template_name": template_name,
@@ -420,15 +452,17 @@ class QueryEngine:
         try:
             safe_cypher = self.sanitize_cypher(response.cypher)
             if not safe_cypher:
-                logger.warning(f"[Warning] Sanitization failed for query: {query}")
+                logger.warning(f"[Sanitize] Rejected generated Cypher for query: {query}")
                 logger.warning(f"  Generated Cypher: {response.cypher}")
                 return None
 
             safe_cypher = self.resolve_names_in_cypher(safe_cypher)
+            # Last step before execution: lift every remaining literal into a
+            # parameter, so the executed text is fully under our control.
+            safe_cypher, params = self.parameterize_literals(safe_cypher)
+            params["repo_id"] = self.repo_id
 
-            with self.graph_driver.session() as session:
-                result = session.run(safe_cypher)
-                data = [record.data() for record in result]
+            data = self._run_read(safe_cypher, params)
 
             is_fallback = (
                 len(data) == 1 and
@@ -524,16 +558,19 @@ class QueryEngine:
         if self._file_index is not None:
             return self._file_index
 
-        with self.graph_driver.session() as session:
-            result = session.run(f"""
-                MATCH (r:Repo {{repo_id: '{self.repo_id}'}})-[:CONTAINS]->(f:File)
+        with self.graph_driver.session(default_access_mode="READ") as session:
+            result = session.run(
+                """
+                MATCH (r:Repo {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 OPTIONAL MATCH (f)-[:DEFINES_CLASS]->(c:Class)
                 OPTIONAL MATCH (f)-[:DEFINES_FUNCTION]->(fn:Function)
                 OPTIONAL MATCH (c)-[:HAS_METHOD]->(m:Function)
                 RETURN f.name as name, f.path as path,
                        collect(DISTINCT c.name) as classes,
                        collect(DISTINCT fn.name) + collect(DISTINCT m.name) as functions
-            """)
+                """,
+                repo_id=self.repo_id,
+            )
             self._file_index = [dict(r) for r in result]
 
         logger.debug(f"[index] Loaded {len(self._file_index)} files into index")
@@ -580,15 +617,56 @@ class QueryEngine:
 
         return list(set(matched_paths))
 
-    def sanitize_cypher(self, cypher: str) -> str:
+    def sanitize_cypher(self, cypher: str) -> str | None:
+        """Reject anything that could write, or that touches an unknown property.
+
+        Two independent checks, because either alone is insufficient: a
+        write-clause denylist, and a property allow-list. Only the latter
+        existed before, and it happily passed `MATCH (n) DETACH DELETE n` —
+        there is no `n.prop` in that for it to complain about.
+        """
+        if not cypher or not cypher.strip():
+            return None
+
+        # Literals are blanked first so a file legitimately named
+        # "delete everything" is not mistaken for a DELETE clause.
+        lowered = _strip_string_literals(cypher).lower()
+        for clause in self.WRITE_CLAUSES:
+            if re.search(rf"\b{clause}\b", lowered):
+                logger.warning(f"[Sanitize] Blocked write clause '{clause}'")
+                return None
+
         cypher_clean = re.sub(r"'[^']*'|\"[^\"]*\"", "''", cypher)
-        used_props = set(re.findall(r'\b\w+\.(\w+)\b', cypher_clean))
+        used_props = set(re.findall(r"\b\w+\.(\w+)\b", cypher_clean))
         cypher_keywords = {'path', 'type', 'keys', 'labels', 'id', 'properties'}
         invalid = used_props - VALID_FILE_PROPERTIES - cypher_keywords
         if invalid:
             logger.warning(f"[Sanitize] Blocked invalid properties: {invalid}")
             return None
         return cypher
+
+    def parameterize_literals(self, cypher: str) -> tuple[str, dict]:
+        """Move quoted literals out of the query text and into parameters.
+
+        The model is told to write `{repo_id: 'x'}` and `{name: 'y'}`, and those
+        values originate from an indexed repository — so a repo file named
+        `x.py') ...` is a prompt-injection path into the query. Rewriting every
+        property-map literal to a generated parameter means no repo-derived text
+        ever reaches the executed Cypher string.
+
+        This runs *after* sanitize_cypher(), which is what makes a value
+        containing a quote harmless: step one has already refused the query.
+        """
+        params: dict = {}
+        pattern = re.compile(r"\{(\w+)\s*:\s*'([^']*)'\}")
+
+        def repl(match):
+            prop, value = match.group(1), match.group(2)
+            key = f"_lit_{len(params)}"
+            params[key] = value
+            return "{" + prop + ": $" + key + "}"
+
+        return pattern.sub(repl, cypher), params
 
     def resolve_names_in_cypher(self, cypher: str) -> str:
         def replacer(match):
