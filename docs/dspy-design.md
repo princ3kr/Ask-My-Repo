@@ -150,7 +150,9 @@ difference.
 | Change | Calls | Tokens | Latency |
 |---|---|---|---|
 | Rewriter gate (6 follow-up questions) | 21 → 19 | ~26.9k → ~26.9k | within noise |
+| Route cache (repeat question) | 2 → 1 | — | one fewer round-trip |
 | Speculative retrieval | unchanged | unchanged | 2532ms → 2000ms on that segment |
+| Lazy repo files (new session) | unchanged | unchanged | no clone on the request path |
 
 **The rewriter gate saves calls, not time.** It removes an LLM call from
 follow-up questions that are already self-contained — 2 of the 6 in the suite —
@@ -235,18 +237,45 @@ data problem, which is the argument for building the eval set first.
 
 1. `dspy_bridge` — signatures + modules, wrapping existing call sites. **done**
 2. Eval set — 3 repos, objective where possible. **done** (34 examples, 25 objective)
-3. Gates + speculation — latency work that stands alone. **done**
-4. Shadow mode — run both, log agreement, change nothing.
-5. Optimise — `MIPROv2` on the Cypher metric first (objective), then `GEPA`
-   for the judge-based modules.
-6. Cut over per module, keeping a rollback flag.
+3. Gates + speculation + route cache — latency and cost work that stands alone. **done**
+4. Shadow mode — run both, log agreement, change nothing. **partly** — `DspyRuntime.shadow` exists and reports agreement; not yet wired to compare against the legacy prompt's own output.
+5. Optimise — `MIPROv2` on the Cypher metric first (objective), then `GEPA` for the judge-based modules. **not started**
+6. Cut over per module, keeping a rollback flag. **not started**
 
-Each stage is independently useful; if optimisation is abandoned, stages 1–3
-still cut latency.
+Each stage is independently useful; stages 1–3 land their value whether or not
+optimisation ever runs.
 
 DSPy is **off by default** (`ASK_DSPY=1` opts in). Every entry point returns
 `None` on any failure and the caller uses the existing LangChain prompt, so a
 DSPy problem degrades to current behaviour rather than a 500.
+
+### Flags
+
+| Flag | Effect |
+|---|---|
+| `ASK_DSPY=1` | serve answers from DSPy programs (default: off) |
+| `DSPY_TIER` | `mixed` (default) / `cheap` / `strong` |
+| `DSPY_STRONG`, `DSPY_CHEAP` | model names for the two tiers |
+| `ASK_DSPY_SHADOW` | run both backends, log agreement, serve the legacy one |
+| `ASK_NO_GATES=1` | always run the rewriter (measures what the gate is worth) |
+| `ASK_NO_SPECULATE=1` | never overlap vector retrieval with Cypher generation |
+
+## What is verified, and what is not
+
+**Verified by running it:**
+
+- Full pipeline end-to-end, three question shapes (graph / hybrid / architecture), with DSPy both off and on.
+- Every API route through `TestClient`: `/health`, `/api/tree`, `/api/graph_data`, `POST /api/chat`.
+- `get_graph_data` after the `elementId` change: 167 nodes, 230 edges, all edge endpoints resolving to unique node ids.
+- Every program binds the model its tier names, across all three tiers.
+- Citation grounding overrides a false verifier verdict, while still flagging a half-invented answer.
+- 236 tests, ruff clean.
+
+**Not yet established:**
+
+- That the cheap tier is good enough. The gap is 0.042 F1 on 16 examples — about one example — which is not enough to justify either direction.
+- That optimisation helps. `MIPROv2` has not been run.
+- That any of this improved end-to-end p50. Provider variance between runs (4.95s–7.57s for an identical configuration) exceeds every effect measured, so the latency work is justified on the isolated measurements alone.
 
 ## Constraints carried over from the existing code
 
@@ -257,7 +286,9 @@ DSPy problem degrades to current behaviour rather than a 500.
   is rejected on arrival.
 - Every read still runs in a READ transaction.
 - Compiled prompts must not leak between repos.
-- The verifier is a quality gate, not a security gate. It is LLM-judged.
+- The verifier is a quality gate, not a security gate. It is LLM-judged, and it
+  has already been observed to misjudge, which is why an objective check
+  arbitrates it.
 
 ## Commands
 
@@ -268,7 +299,7 @@ uv run python -m src.evaluation.build_eval_set
 # baseline: current prompts, cheapest tier
 uv run python -m src.evaluation.optimize --program cypher --mode eval
 
-# what does the strong model cost more than the cheap one?
+# compare tiers on the same split
 uv run python -m src.evaluation.optimize --program cypher --mode eval --tier strong
 
 # optimise, then replay the artefact against the held-out split
