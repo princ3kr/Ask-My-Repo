@@ -123,11 +123,14 @@ class DspyRuntime:
         with self._lock:
             if self._programs:
                 return self._programs
-            from src.backend.dspy_bridge.config import configure_lms
+            from src.backend.dspy_bridge.config import bind_models, configure_lms
             from src.backend.dspy_bridge.programs import build_programs
 
             configure_lms(self.tier)
             programs = build_programs()
+            # Must happen after build_programs: binding sets an attribute on the
+            # predictors those calls create.
+            bind_models(programs, self.tier)
             self._load_compiled(programs)
             self._programs = programs
             logger.info(

@@ -97,6 +97,42 @@ thing that actually overlaps them.
 thread-safe, so that is the switch to reach if a deployment ever sees
 cross-request interference.
 
+## The tier tables did nothing
+
+Worth recording separately, because it was invisible for as long as it existed.
+
+`configure_lms` set a single global default LM. A `dspy.Predict` that carries
+no `lm` of its own resolves `dspy.settings.lm` at call time — so every program
+ran on whichever model was configured as the default, which was the
+*synthesize* model. The tier tables were read correctly by `model_for` and then
+never applied.
+
+The symptom was that a comparison across tiers produced byte-identical scores:
+
+```
+mixed   F1 = 0.574
+strong  F1 = 0.574
+```
+
+Different models, identical results, no error. The first suspicion was the
+DSPy disk cache replaying one tier's responses for another; that was wrong —
+the cache key does include the model name. The actual cause was that both tiers
+were running the same model.
+
+Two further bugs surfaced while fixing it, both in the same traversal:
+
+- `ChainOfThought` is not a `Predict` subclass, so a `isinstance` check left
+  `route` and `synthesize` unbound — the two programs most likely to matter.
+- The traversal probed `hasattr(obj, "predict")` before testing `isinstance`,
+  but a leaf `Predict` has no `predict` attribute, so it discarded exactly the
+  object it was looking for and found nothing at all.
+
+Fixed by `bind_models`, which walks to the leaf predictor and sets `lm` there.
+`tests/test_dspy_bridge.py::TestModelBinding` now asserts that every program
+binds a model, that the bound model matches the tier, and that `mixed` actually
+differs from a uniform assignment — that last one being the assertion that
+would have caught this in the first place.
+
 ## Measured, not projected
 
 Latency and cost were the stated goals, so they were measured rather than
@@ -135,13 +171,30 @@ quality.** Worth having, and worth being precise about, because it is a fifth
 of a typical hybrid request rather than the two-thirds the call-count framing
 suggested.
 
-**Honest status of the cost claim.** The tier assignment is not yet a measured
-saving. What has been measured is that the cheap tier produces valid Cypher
-(1.1–2.3s per query, returning correct rows for all three probe questions) and
-that the current prompts score F1 = 0.532 on the eval set at that tier. What has
-*not* been done is the comparison that would justify the switch: evaluate the
-same split at `mixed` and `strong`, optimise, and replay on the held-out split.
-Until that runs, "the cheap model is good enough" is an assumption.
+**Honest status of the cost claim.** With binding fixed, the three tiers now
+differ on the eval set, unoptimised prompts, train split:
+
+| Tier | Cypher model | F1 (n=16) |
+|---|---|---|
+| `cheap` | gpt-4o-mini | 0.532 |
+| `mixed` | gpt-4o-mini | 0.532 |
+| `strong` | gpt-4o | 0.574 |
+
+`mixed` and `cheap` match exactly here because the Cypher program runs on the
+cheap model in both — the tiers differ only in which program gets which model,
+so for this one program they are the same configuration.
+
+The gap is 0.042 F1 on 16 examples, which is roughly one example flipping from
+fully wrong to fully right. That is **not** enough evidence to justify either
+direction, in either direction: the split is too small and the unoptimised
+prompt is doing most of the work. What would settle it is running MIPROv2 and
+replaying on the held-out split, which is the next step and not yet done.
+
+So the honest position: the cheap tier costs at most a small amount of Cypher
+accuracy, and the size of that amount is not yet known well enough to call it
+negligible. Everything else — routing, rewriting, verification — is
+classification with far less at stake, and synthesis stays on the strong model
+regardless.
 
 ### Why the cheap-model tier is viable
 

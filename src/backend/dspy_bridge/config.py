@@ -86,6 +86,87 @@ def configure_lms(tier: str | None = None) -> dict[str, dspy.LM]:
     return lms
 
 
+def _leaf_predictors(program) -> list[dspy.Predict]:
+    """Every `Predict` a module will actually call.
+
+    `RouteQuestion.classify` is a `ChainOfThought`, whose `predict` attribute
+    is the `Predict` that issues the request. Binding the wrapper would set an
+    attribute nothing reads.
+    """
+    found: list[dspy.Predict] = []
+
+    def visit(obj, depth: int = 0) -> None:
+        # The isinstance test has to come first: a leaf `Predict` has no
+        # `predict` attribute of its own, so probing for it first would
+        # discard exactly the object being looked for.
+        if depth > 3 or obj is None:
+            return
+        if isinstance(obj, dspy.Predict):
+            found.append(obj)
+            return
+        inner = getattr(obj, "predict", None)
+        if inner is not None:
+            visit(inner, depth + 1)
+
+    for attr in dir(program):
+        if attr.startswith("_"):
+            continue
+        try:
+            value = getattr(program, attr)
+        except Exception:
+            continue
+        if isinstance(value, dspy.Predict):
+            found.append(value)
+        elif isinstance(value, dspy.Module):
+            visit(value)
+    return found
+
+
+def bind_models(programs: dict, tier: str | None = None) -> dict:
+    """Attach each program's tier model to the predictors that call it.
+
+    Without this the tier tables do nothing. A `dspy.Predict` resolves
+    `dspy.settings.lm` at call time when it carries no `lm` of its own, so
+    every program silently runs on whichever model is configured as the global
+    default — which is the *synthesize* model. The cost of a cheap routing tier
+    would then be zero in the configuration and the full price on every
+    request.
+
+    `lm` is set on the leaf predictor. A `dspy.Predict` reads `self.lm`, and a
+    `ChainOfThought` delegates to an inner `Predict` (`cot.predict`), so
+    binding has to reach through the wrapper. Checking only for a `Predict`
+    attribute would leave the ChainOfThought programs unbound -- which is
+    exactly what happened, silently, until a test asked which model a call
+    would actually reach.
+
+    Programs with no reachable predictor are left alone and reported, so an
+    unexpected shape surfaces here rather than running on the wrong model.
+    """
+    assignment = assignment_for(tier)
+    lms = {name: _lm_for(name) for name in sorted(set(assignment.values()))}
+    unbound = []
+
+    for name, program in programs.items():
+        predictors = _leaf_predictors(program)
+        if not predictors:
+            unbound.append(name)
+            continue
+        for predictor in predictors:
+            predictor.lm = lms[assignment[name]]
+
+    if unbound:
+        logger.warning(
+            "no dspy.Predict found in %s; they will run on the global LM "
+            "(%s). Check the program shape.",
+            ", ".join(sorted(unbound)), assignment["synthesize"],
+        )
+    logger.debug(
+        "bound %d of %d programs to %s",
+        len(programs) - len(unbound), len(programs), tier_for(tier),
+    )
+    return lms
+
+
 def _lm_for(name: str) -> dspy.LM:
     if name not in _configured:
         # cache=True is what makes an optimisation run affordable: the

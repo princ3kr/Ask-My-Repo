@@ -52,6 +52,7 @@ import dspy  # noqa: E402
 from src.backend.dspy_bridge.config import (  # noqa: E402
     STRONG_MODEL,
     TIERS,
+    bind_models,
     configure_lms,
     model_for,
 )
@@ -137,6 +138,7 @@ def cypher_examples(examples: list[dspy.Example]) -> list[dspy.Example]:
 def run_eval(program_name: str, split: str, tier: str) -> float:
     configure_lms(tier)
     programs = build_programs()
+    bind_models(programs, tier)
     program = programs[program_name]
 
     examples = cypher_examples(load_split(split))
@@ -163,6 +165,7 @@ def run_eval(program_name: str, split: str, tier: str) -> float:
 def run_optimize(program_name: str, split: str, tier: str, auto: str) -> None:
     configure_lms(tier)
     programs = build_programs()
+    bind_models(programs, tier)
     program = programs[program_name]
 
     examples = cypher_examples(load_split(split))
@@ -215,7 +218,9 @@ def run_replay(program_name: str, split: str, tier: str) -> float:
     if not path.exists():
         logger.error("no saved programme at %s", path)
         return 0.0
-    program = build_programs()[program_name]
+    programs = build_programs()
+    bind_models(programs, tier)
+    program = programs[program_name]
     program.load(path)
     return run_eval(program_name, split, tier)
 

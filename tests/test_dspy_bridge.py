@@ -481,6 +481,76 @@ class TestVerifyGate:
 
 
 # ── tier assignment ─────────────────────────────────────────────────────────
+class TestModelBinding:
+    """A `dspy.Predict` with no `lm` of its own resolves `dspy.settings.lm` at
+    call time. Setting a global default therefore does *not* implement per-step
+    tiers: every program runs on whichever model is the default. These tests
+    exist because that bug made the whole tier configuration decorative while
+    still returning plausible answers."""
+
+    def _bound(self, tier):
+
+        from src.backend.dspy_bridge.config import bind_models, configure_lms
+        from src.backend.dspy_bridge.programs import build_programs
+
+        configure_lms(tier)
+        programs = build_programs()
+        bind_models(programs, tier)
+        return programs
+
+    def _predictor(self, program):
+        """The predictor a call would actually reach.
+
+        For a ChainOfThought program that is the inner `predict`, not the
+        wrapper -- binding the wrapper would set an attribute nothing reads.
+        """
+        from src.backend.dspy_bridge.config import _leaf_predictors
+
+        predictors = _leaf_predictors(program)
+        assert predictors, "no reachable predictor"
+        return predictors[0]
+
+    def test_every_program_binds_a_model(self):
+
+        programs = self._bound("mixed")
+        for name in ("route", "rewrite", "cypher", "synthesize", "verify"):
+            lm = getattr(self._predictor(programs[name]), "lm", None)
+            assert lm is not None, f"{name} has no bound LM"
+
+    def test_bound_model_matches_the_tier(self):
+
+        from src.backend.dspy_bridge.config import model_for
+        from src.backend.dspy_bridge.config import PROGRAMS as PROGRAMS_IN_TIER
+
+        programs = self._bound("mixed")
+        for name in PROGRAMS_IN_TIER:
+            lm = self._predictor(programs[name]).lm
+            assert lm.model == model_for(name, "mixed"), name
+
+    def test_mixed_tier_actually_differs_from_a_uniform_one(self):
+        """The whole point: if every program binds the same model, the tier
+        changes nothing and the cost configuration is a no-op."""
+        programs = self._bound("mixed")
+        models = {
+            n: self._predictor(programs[n]).lm.model
+            for n in ("route", "cypher", "synthesize")
+        }
+        assert len(set(models.values())) > 1, f"tier did nothing: {models}"
+
+    def test_rebinding_replaces_a_stale_model(self):
+        """Caching the runtime must not leave the previous tier's model bound."""
+        self._bound("strong")
+        programs = self._bound("cheap")
+        assert self._predictor(programs["synthesize"]).lm.model == "openai/gpt-4o-mini"
+
+    def test_chain_of_thought_is_bound_too(self):
+        """Route and synthesize wrap Predict in ChainOfThought, which delegates
+        to an inner Predict — so binding only bare Predicts would miss them."""
+        programs = self._bound("mixed")
+        for name in ("route", "synthesize"):
+            assert self._predictor(programs[name]).lm is not None, name
+
+
 class TestModelTiers:
     def test_every_tier_assigns_every_program(self):
         """A partial mapping makes model_for fall through to a default nobody
