@@ -492,7 +492,7 @@ def get_graph(repo_id: str):
         raise HTTPException(status_code=404, detail="Graph not found")
 
     try:
-        with open(chosen, "r", encoding="utf-8") as fh:
+        with open(chosen, encoding="utf-8") as fh:
             content = fh.read()
         return HTMLResponse(content=content, media_type="text/html")
     except Exception as e:

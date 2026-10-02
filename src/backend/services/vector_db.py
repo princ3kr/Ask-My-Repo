@@ -196,7 +196,7 @@ class VectorStore:
     def build(self, max_module_lines=MAX_CHUNK_LINES, overlap=5):
         self.chunks = []
         
-        for file in self.files.keys():
+        for file in self.files:
             content = self.files[file]['content']
             lines = content.split('\n')
             classes = self.files[file]['classes']
@@ -420,7 +420,7 @@ class VectorStore:
                 f"[rerank] {len(documents)} docs but {len(scores)} scores; "
                 "preserving Qdrant order."
             )
-            ranked = list(zip(metadatas, documents))[:top_k]
+            ranked = list(zip(metadatas, documents, strict=False))[:top_k]
             return [(m, 0.0, d) for m, d in ranked]
 
         # Fallback to local SentenceTransformer if scores are not pre-computed

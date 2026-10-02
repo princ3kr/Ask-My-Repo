@@ -1,7 +1,7 @@
 [project]
 name = "repo-2-graph"
 version = "0.1.0"
-description = "Add your description here"
+description = "Natural-language Q&A over any GitHub repository, backed by a Neo4j dependency graph and a Qdrant vector index."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,9 +14,16 @@ dependencies = [
     "langchain_community>=0.2.0",
     "langchain_groq>=0.1.0",
     "langchain_openai>=0.1.0",
+    # NOTE: the currently-resolved ragas release imports
+    # langchain_community.chat_models.vertexai, which no longer exists in
+    # current langchain-community, so `import ragas` raises ModuleNotFoundError.
+    # src/evaluation/eval.py imports ragas lazily to contain the blast radius,
+    # but the scoring step will not run until ragas/langchain-community are
+    # pinned to a compatible pair.
     "ragas",
     "pillow",
     "fuzzywuzzy",
+    "python-Levenshtein",
     "einops",
     "sentence-transformers==3.2.1",
     "transformers==4.41.0",
@@ -24,4 +31,45 @@ dependencies = [
     "python-dotenv",
     "fastapi",
     "uvicorn"
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# src/data holds cloned repos, src/models a multi-GB model cache.
+extend-exclude = ["src/data", "src/models", ".venv", "notebook"]
+
+[tool.ruff.lint]
+# E4/E7/E9 are the correctness rules; the rest are what actually surfaced
+# problems during the initial review.
+select = ["E4", "E7", "E9", "F", "B", "UP", "SIM"]
+ignore = [
+    "E501",    # line length is the formatter's job
+    "B008",    # FastAPI Depends()/Field() defaults in signatures
+    "SIM105",  # contextlib.suppress is slower than try/except pass here
+    "SIM108",  # a ternary is not always clearer
+    "B904",    # deliberate: we re-raise with added context, not bare
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These call load_dotenv() / sys.path.insert() before importing the package, so
+# their module-level imports are deliberately not at the top of the file.
+"src/backend/api.py" = ["E402"]
+"app.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    # fuzzywuzzy is pure-python without this; it is a transitive perf issue.
+    "ignore:Using slow pure-python SequenceMatcher:UserWarning",
 ]

@@ -272,7 +272,7 @@ All via `.env` (see `.env.example`):
 
 ```bash
 # Backend
-uv sync
+uv sync --group dev
 uv run uvicorn src.backend.api:app --reload
 
 # Frontend
@@ -282,3 +282,30 @@ npm run dev
 ```
 
 Point the UI at `http://localhost:5173`, enter a GitHub repo URL, and start asking questions.
+
+---
+
+## Development
+
+```bash
+# Tests (no database or network required)
+uv run pytest
+
+# Lint
+uv run ruff check src tests app.py
+cd src/frontend && npm run lint
+```
+
+CI runs both on every push. The test suite never opens a socket: credentials are
+stubbed in `tests/conftest.py` and every unit under test is constructed without
+its live-client wiring.
+
+### Configuration additions
+
+| Variable | Required | Description |
+|---|---|---|
+| `CORS_ORIGINS` | No | Comma-separated allowed origins (default `http://localhost:5173,http://127.0.0.1:5173`) |
+| `EMBED_BATCH_SIZE` | No | Chunks per Qdrant push batch (default: 4) |
+
+`GET /health` reports whether Neo4j and Qdrant are both reachable — worth
+checking first when a parse fails.

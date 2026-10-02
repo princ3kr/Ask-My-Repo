@@ -18,7 +18,7 @@ class TestIterLineRanges:
         assert ranges[0] == (0, 100)
         assert ranges[-1][1] == 250
         # Consecutive chunks overlap by `overlap` lines.
-        for (s1, e1), (s2, _) in zip(ranges, ranges[1:]):
+        for (_s1, e1), (s2, _) in zip(ranges, ranges[1:], strict=False):
             assert s2 == e1 - 10
 
     def test_terminates_when_overlap_exceeds_chunk_size(self, vector_store):
@@ -115,9 +115,9 @@ class TestIndexMarker:
     def test_marker_id_is_a_stable_uuid(self):
         from src.backend.services.vector_db import INDEX_MARKER_ID
 
-        assert INDEX_MARKER_ID == str(
+        assert str(
             uuid.uuid5(uuid.NAMESPACE_DNS, "ask-my-repo:index-complete")
-        )
+        ) == INDEX_MARKER_ID
         # Qdrant point ids must be a UUID or an unsigned int.
         uuid.UUID(INDEX_MARKER_ID)
 

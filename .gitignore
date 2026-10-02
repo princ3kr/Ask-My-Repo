@@ -56,5 +56,7 @@ models/
 *.sqlite
 *.sqlite3
 
-uv.lock
 data/
+
+# NOTE: uv.lock is deliberately NOT ignored. It pins the dependency set, so
+# committing it keeps `uv sync` reproducible for everyone.

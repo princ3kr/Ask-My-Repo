@@ -1,5 +1,5 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Sun, Moon, Book, User, GitBranch, Menu } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Sun, Moon, Book, GitBranch, Menu } from 'lucide-react';
 import logo from '../../assets/Ask-My-repo.png';
 
 const MIN_LEFT = 180;

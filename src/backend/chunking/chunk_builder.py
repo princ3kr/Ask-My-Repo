@@ -120,7 +120,7 @@ class ChunkBuilder:
             modules = self.files[filepath].get("import_modules", [])
             names = self.files[filepath].get("import_names", [])
 
-            for imp, imp_names in zip(modules, names):
+            for imp, imp_names in zip(modules, names, strict=False):
                 if not imp:
                     continue
 
@@ -137,7 +137,7 @@ class ChunkBuilder:
 
     def _code_indexes(self):
         class_index, function_index, method_index, caller_class = {}, {}, {}, {}
-        for path, data in self.files.items():
+        for _path, data in self.files.items():
             for cls in data.get("classes", []):
                 class_index.setdefault(cls["name"], cls["qualified_name"])
             for fn in data.get("functions", []):
@@ -180,8 +180,7 @@ class ChunkBuilder:
         try:
             class_index, function_index, method_index, caller_class = self._code_indexes()
             repo_id = self.repo_id
-            with driver.session() as session:
-                with session.begin_transaction() as tx:
+            with driver.session() as session, session.begin_transaction() as tx:
                     for path, data in self.files.items():
                         imports = [imp.get("name") for imp in data.get("imports", []) if imp.get("name")]
                         tx.run('''
@@ -253,7 +252,7 @@ class ChunkBuilder:
                             MERGE (a)-[:IMPORTS]->(b)
                         ''', source=source, target=target, repo_id=repo_id)
 
-                    for path, data in self.files.items():
+                    for data in self.files.values():
                         for rel in data.get("inheritance", []):
                             base_type, target = ("class", class_index[rel["base"]]) if rel["base"] in class_index else ("external", rel["base"])
                             if base_type == "class":
@@ -297,26 +296,25 @@ class ChunkBuilder:
         """Apply merged entry point results (AST + LLM) to existing Neo4j graph."""
         driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
         try:
-            with driver.session() as session:
-                with session.begin_transaction() as tx:
-                    for ep in entry_points:
-                        if not ep.get("is_entry", True):
-                            continue
-                        path = ep.get("path")
-                        qname = ep.get("qualified_name")
-                        kind = ep.get("kind")
-                        confidence = ep.get("confidence", 0.8)
+            with driver.session() as session, session.begin_transaction() as tx:
+                for ep in entry_points:
+                    if not ep.get("is_entry", True):
+                        continue
+                    path = ep.get("path")
+                    qname = ep.get("qualified_name")
+                    kind = ep.get("kind")
+                    confidence = ep.get("confidence", 0.8)
 
-                        if qname and kind != "main_block":
-                            tx.run('''
+                    if qname and kind != "main_block":
+                        tx.run('''
                                 MATCH (fn:Function {qualified_name: $qname, repo_id: $repo_id})
                                 SET fn.is_entry = true,
                                     fn.entry_kind = $kind,
                                     fn.entry_confidence = $confidence
                             ''', repo_id=repo_id, qname=qname, kind=kind, confidence=confidence)
 
-                        if path:
-                            tx.run('''
+                    if path:
+                        tx.run('''
                                 MATCH (f:File {path: $path, repo_id: $repo_id})
                                 SET f.is_entry = true
                             ''', repo_id=repo_id, path=path)

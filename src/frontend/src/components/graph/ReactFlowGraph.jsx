@@ -10,7 +10,7 @@ import {
     MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { nodeTypes } from './CustomNodes';
+import { nodeTypes } from './nodeTypes';
 
 function getNodeDir(node) {
     const path = node.data?.path;
@@ -354,10 +354,6 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const controllerRef = React.useRef(null);
 
-    const allNodeTypes = useMemo(() => ({
-        ...nodeTypes,
-    }), []);
-
     useEffect(() => {
         if (graphData && graphData.nodes && graphData.edges) {
             setNodes(groupedNodes);
@@ -422,7 +418,7 @@ const ReactFlowGraph = forwardRef(function ReactFlowGraph({ graphData, onNodeCli
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={handleNodeClick}
-                nodeTypes={allNodeTypes}
+                nodeTypes={nodeTypes}
                 fitView
                 defaultEdgeOptions={defaultEdgeOptions}
                 minZoom={0.1}

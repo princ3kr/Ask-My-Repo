@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Folder, FolderOpen, File, FileCode, FileJson, ChevronRight, ChevronDown, Search, Box, Activity } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Folder, FolderOpen, File, FileCode, FileJson, ChevronRight, ChevronDown, Search, Activity } from 'lucide-react';
 import clsx from 'clsx';
 
 function getFileIcon(filename) {

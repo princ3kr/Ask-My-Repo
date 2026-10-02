@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Send, MessageSquare, Bot, User, Loader2, ChevronDown, ChevronUp, RotateCcw, Network } from 'lucide-react';
+import { useState } from 'react';
+import { Send, MessageSquare, Bot, User, Loader2, ChevronDown, ChevronUp, Network } from 'lucide-react';
 import clsx from 'clsx';
 
 const suggestions = [

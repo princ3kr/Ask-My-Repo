@@ -53,9 +53,11 @@ class QueryEngine:
         self.repo_id = repo_id
         self.llm = llm
 
-        uri = uri or os.getenv("NEO4j_URI") or os.getenv("NEO4J_URI")
-        user = user or os.getenv("NEO4j_USER") or os.getenv("NEO4J_USER")
-        password = password or os.getenv("NEO4j_PASS") or os.getenv("NEO4J_PASS")
+        # The lower-case "NEO4j_*" spellings never matched a real env var (typo)
+        # and always fell through to the correct one; ruff's SIM112 flagged them.
+        uri = uri or os.getenv("NEO4J_URI")
+        user = user or os.getenv("NEO4J_USER")
+        password = password or os.getenv("NEO4J_PASS")
 
         if not uri or not user or not password:
             raise ValueError("Neo4j credentials are not set in the environment or constructor!")
@@ -314,16 +316,16 @@ class QueryEngine:
     def extract_critical_path_files(self, architect_result: dict, limit: int = 4) -> list[str]:
         paths: list[str] = []
         for record in architect_result.get("data", []):
-            for key, val in record.items():
+            for _key, val in record.items():
                 if isinstance(val, str) and (val.endswith(".py") or "/" in val):
                     paths.append(val)
                 elif isinstance(val, list):
                     for item in val:
-                        if isinstance(item, str):
-                            if item.endswith(".py") or "::" in item:
-                                fn_path = item.split("::")[0] if "::" in item else item
-                                if fn_path.endswith(".py"):
-                                    paths.append(fn_path)
+                        if not isinstance(item, str):
+                            continue
+                        fn_path = item.split("::")[0] if "::" in item else item
+                        if fn_path.endswith(".py"):
+                            paths.append(fn_path)
         seen = set()
         unique = []
         for p in paths:
@@ -514,7 +516,7 @@ class QueryEngine:
 
         file_count = 0
         for record in data:
-            for k, v in record.items():
+            for _k, v in record.items():
                 if isinstance(v, str) and v.endswith(".py"):
                     file_count += 1
                 elif isinstance(v, list):

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import DashboardLayout from './components/layout/DashboardLayout';
 import Explorer from './components/sidebar/Explorer';
 import QueryPanel from './components/sidebar/QueryPanel';

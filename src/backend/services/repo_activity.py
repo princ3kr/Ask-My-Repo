@@ -67,10 +67,9 @@ class RepoActivityTracker:
             
             for repo_id, last_activity in self.activity_log.items():
                 time_since = now - last_activity
-                if time_since > timeout:
-                    if oldest_time is None or time_since > oldest_time:
-                        oldest_repo = repo_id
-                        oldest_time = time_since
+                if time_since > timeout and (oldest_time is None or time_since > oldest_time):
+                    oldest_repo = repo_id
+                    oldest_time = time_since
             
             return oldest_repo
 

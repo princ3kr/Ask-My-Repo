@@ -48,10 +48,7 @@ def _is_openai_failure(exception: Exception) -> bool:
     msg = str(exception).lower()
     exc_name = type(exception).__name__.lower()
 
-    for keyword in OPENAI_FAILURE_KEYWORDS:
-        if keyword in msg or keyword in exc_name:
-            return True
-    return False
+    return any(keyword in msg or keyword in exc_name for keyword in OPENAI_FAILURE_KEYWORDS)
 
 
 class FallbackChatModel:

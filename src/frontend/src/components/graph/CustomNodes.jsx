@@ -1,4 +1,3 @@
-import React from 'react';
 import { Handle, Position } from '@xyflow/react';
 import { FileCode, Box, Play, Database, Star, GitFork, Import, Folder } from 'lucide-react';
 import clsx from 'clsx';
@@ -135,8 +134,3 @@ export function CustomNode({ data }) {
         </div>
     );
 }
-
-export const nodeTypes = {
-    customNode: CustomNode,
-    groupNode: GroupNode,
-};

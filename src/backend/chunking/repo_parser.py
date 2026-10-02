@@ -189,9 +189,7 @@ def _is_http_endpoint_decorator(decorator) -> bool:
     parts = name.split(".")
     if parts[-1] in HTTP_METHODS:
         return True
-    if len(parts) >= 2 and parts[-2] in ("app", "router", "api", "blueprint") and parts[-1] in HTTP_METHODS:
-        return True
-    return False
+    return bool(len(parts) >= 2 and parts[-2] in ("app", "router", "api", "blueprint") and parts[-1] in HTTP_METHODS)
 
 
 def _is_cli_decorator(decorator) -> bool:
@@ -227,13 +225,11 @@ def _is_main_guard(node) -> bool:
 def _detect_entry_points(tree, filepath: str | None) -> tuple[list[dict], bool, str]:
     """AST pass: high-confidence entry points + flag uncertain files for LLM review."""
     entry_points: list[dict] = []
-    has_main_block = False
     module_level_bootstrap = False
     decorator_names: list[str] = []
 
     for node in tree.body:
         if _is_main_guard(node):
-            has_main_block = True
             for child in node.body:
                 if isinstance(child, ast.Expr) and isinstance(child.value, ast.Call):
                     callee = _expr_name(child.value.func)
@@ -273,6 +269,17 @@ def _detect_entry_points(tree, filepath: str | None) -> tuple[list[dict], bool, 
                     "reason": f"module-level call to {callee}",
                 })
 
+    # One pass to map each function node to its enclosing class name. The
+    # previous code re-walked the entire tree for every HTTP-decorated function
+    # to answer the same question, which is O(functions * nodes): a file with
+    # 300 endpoints spent seconds in this loop alone.
+    parent_class: dict[int, str] = {}
+    for parent in ast.walk(tree):
+        if isinstance(parent, ast.ClassDef):
+            for child in parent.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    parent_class[id(child)] = parent.name
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for dec in node.decorator_list:
@@ -280,20 +287,13 @@ def _detect_entry_points(tree, filepath: str | None) -> tuple[list[dict], bool, 
                 if dec_name:
                     decorator_names.append(dec_name)
 
-                func_qname = (
-                    f"{filepath}::{node.name}" if filepath and not getattr(node, "_in_class", False)
-                    else node.name
-                )
-                for cls in getattr(node, "_parent_classes", []):
-                    func_qname = f"{filepath}::{cls}.{node.name}" if filepath else f"{cls}.{node.name}"
-
                 if _is_http_endpoint_decorator(dec):
-                    qname = f"{filepath}::{node.name}" if filepath else node.name
-                    for parent in ast.walk(tree):
-                        if isinstance(parent, ast.ClassDef):
-                            for child in parent.body:
-                                if child is node:
-                                    qname = f"{filepath}::{parent.name}.{node.name}" if filepath else f"{parent.name}.{node.name}"
+                    cls_name = parent_class.get(id(node))
+                    qname = (
+                        f"{filepath}::{cls_name}.{node.name}"
+                        if filepath and cls_name
+                        else (f"{filepath}::{node.name}" if filepath else node.name)
+                    )
                     entry_points.append({
                         "qualified_name": qname,
                         "name": node.name,
@@ -490,7 +490,7 @@ def get_files(repo_link):
                     if os.path.getsize(full_path) > MAX_FILE_BYTES:
                         skipped_large += 1
                         continue
-                    with open(full_path, "r", encoding="utf-8") as f:
+                    with open(full_path, encoding="utf-8") as f:
                         content = f.read()
                 except (OSError, UnicodeDecodeError):
                     # A binary or unreadable file should not abort the index.

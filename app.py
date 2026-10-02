@@ -1,3 +1,8 @@
+"""Interactive CLI over an already-indexed repository.
+
+Usage:
+    uv run python app.py <repo_url>
+"""
 import sys
 import uuid
 
@@ -7,23 +12,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from langchain_openai import ChatOpenAI
-
-from src.backend.chat_engine.engine import ChatWorkflow
-from src.backend.chunking.repo_parser import get_filename, get_files
+from src.backend.chat_engine.engine import ChatWorkflow  # noqa: E402
+from src.backend.chunking.repo_parser import get_filename, get_files  # noqa: E402
+from src.backend.services.llm_fallback import FallbackChatModel  # noqa: E402
 
 
 def run_chat_cli(repo_url: str):
     repo_id = get_filename(repo_url)
+    if not repo_id:
+        print(f"Not a valid repository URL: {repo_url}")
+        sys.exit(1)
+
     session_id = str(uuid.uuid4())
     history: list[dict[str, str]] = []
 
+    # Clone only. The chat path answers from Neo4j + Qdrant, so there is no
+    # reason to AST-parse the tree here.
     print(f"[*] Preparing local files for {repo_id}...")
-    files = get_files(repo_url)
+    get_files(repo_url)
 
     print("[*] Initializing ChatEngine workflow...")
-    llm = ChatOpenAI(model="gpt-4o", temperature=0, max_tokens=1000, max_retries=5, timeout=30.0)
-    engine = ChatWorkflow(repo_id=repo_id, files=files, llm=llm)
+    # FallbackChatModel, matching the API, so the CLI degrades to Groq on an
+    # OpenAI outage instead of dying.
+    llm = FallbackChatModel()
+    engine = ChatWorkflow(repo_id=repo_id, files={}, llm=llm)
 
     print("\n" + "="*50)
     print(f"Chat Engine ready for Repository: {repo_id}")
@@ -78,6 +90,6 @@ def run_chat_cli(repo_url: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python app.py <repo_url>")
+        print(__doc__)
         sys.exit(1)
     run_chat_cli(sys.argv[1])

@@ -1,4 +1,3 @@
-import React from 'react';
 import { GitBranch, Network, Search, MessageSquare, Loader2, Check, Circle, Bot, User, ChevronDown, ChevronUp } from 'lucide-react';
 
 const FEATURES = [
