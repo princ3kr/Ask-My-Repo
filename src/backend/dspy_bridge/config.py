@@ -48,21 +48,29 @@ DEFAULT_TIER = "mixed"
 
 
 def tier_for(name: str | None = None) -> str:
-    return (name or os.getenv("DSPY_TIER", DEFAULT_TIER)).lower()
+    """Resolve a tier name to a known tier.
+
+    Validates here rather than only in `assignment_for` so that a caller
+    reading the tier (logging, reporting, `DspyRuntime.tier`) never sees a
+    value that is not a real tier. An unrecognised name falls back to
+    `DEFAULT_TIER` and logs, because silently serving traffic on a model
+    nobody chose is worse than falling back to the documented default.
+    """
+    tier = (name or os.getenv("DSPY_TIER", DEFAULT_TIER)).strip().lower()
+    if tier not in TIERS:
+        logger.warning(
+            "Unknown DSPy tier %r; using %r. Valid tiers: %s",
+            tier, DEFAULT_TIER, ", ".join(sorted(TIERS)),
+        )
+        return DEFAULT_TIER
+    return tier
 
 _configured: dict[str, dspy.LM] = {}
 
 
 def assignment_for(tier: str | None = None) -> dict[str, str]:
     """The full program -> model mapping for a tier."""
-    tier = tier_for(tier)
-    if tier not in TIERS:
-        logger.warning(
-            "Unknown DSPY_TIER=%r; using %r. Valid tiers: %s",
-            tier, DEFAULT_TIER, ", ".join(sorted(TIERS)),
-        )
-        tier = DEFAULT_TIER
-    return TIERS[tier]
+    return TIERS[tier_for(tier)]
 
 
 def configure_lms(tier: str | None = None) -> dict[str, dspy.LM]:

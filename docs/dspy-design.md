@@ -25,24 +25,34 @@ Cypher gen ~2.5s, vector ~6.0s cold (includes ONNX download), synth ~3.0s —
 ## Architecture
 
 ```
-                    ┌─────────────── PARALLEL ───────────────┐
-                    │                                        │
-              router (DSPy)                          vector search
-              cheap model                            (no LLM call)
-                    │                                        │
-                    └─── merge ──────────────────────────────┘
+                         router  (route program, cheap model)
                               │
-              graph only ──────┴──── hybrid/architecture
-                    │                       │
-              template match?          template match?
-              yes: done (0 calls)      yes: done
-              no:  CypherGen (DSPy,     no:  rewriter (DSPy, cheap)
-                   parallel w/ synth      then CypherGen only if needed
-                              │
-                     verify (DSPy, cheap)  ← the quality gate
-                              │
-                    pass → answer    fail → re-retrieve once, then answer
-```
+        ┌─────────────┬───────┴───────┬─────────────────┐
+        │             │               │                 │
+   architecture       graph          hybrid          (cached?)
+        │             │               │              repeat → cache hit
+        │             │               └── rewriter (gated; skip if
+        │             │                   self-contained)
+        │             │                        │
+        │             │              ┌─────────┴─────────┐
+        │             │              │                   │
+        │             │        graph (cypher)      vector search
+        │             │              ║                   │
+        │             │        template hit?     (speculative: the
+        │             │         yes → 0 calls       unfiltered search
+        │             │         no → cypher prog.   starts here and is
+        │             │              │              joined below)
+        │             │              ║                   │
+        │             │              └── merge ──────────┘
+        │             │                        │
+        └─────────────┴──────────────►  synthesizer (synthesize program)
+                                              │
+                                    verifier (only when confidence
+                                    < 0.7 or context < 800 chars)
+                                              │
+                              negative verdict AND low citation
+                              grounding → append the gap, confidence 0
+
 
 ### The five DSPy modules
 
@@ -235,12 +245,12 @@ data problem, which is the argument for building the eval set first.
 
 ## Rollout
 
-1. `dspy_bridge` — signatures + modules, wrapping existing call sites. **done**
+1. `dspy_bridge` — signatures + modules, wrapping existing call sites. **done** — all five programs are reachable from the engine (verified live, not just by inspection)
 2. Eval set — 3 repos, objective where possible. **done** (34 examples, 25 objective)
 3. Gates + speculation + route cache — latency and cost work that stands alone. **done**
-4. Shadow mode — run both, log agreement, change nothing. **partly** — `DspyRuntime.shadow` exists and reports agreement; not yet wired to compare against the legacy prompt's own output.
+4. Shadow mode — run both, log agreement, change nothing. **done** — `_call` now runs the program and discards the result when shadow is on, independently of `ASK_DSPY`; previously it could never run at all
 5. Optimise — `MIPROv2` on the Cypher metric first (objective), then `GEPA` for the judge-based modules. **not started**
-6. Cut over per module, keeping a rollback flag. **not started**
+6. Cut over per module, keeping a rollback flag. **not started** — gated on stage 5's held-out numbers
 
 Each stage is independently useful; stages 1–3 land their value whether or not
 optimisation ever runs.

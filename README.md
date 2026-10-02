@@ -188,6 +188,61 @@ History is persisted server-side per session (last 16 turns), capped per session
 
 ---
 
+## DSPy Integration (optional)
+
+`src/backend/dspy_bridge/` replaces the individual prompts in the query pipeline with DSPy programs. LangGraph still orchestrates — DSPy only replaces prompts, never the graph topology.
+
+| Program | DSPy module | Replaces | Default model |
+|---|---|---|---|
+| `route` | `ChainOfThought` | router prompt | cheap |
+| `rewrite` | `Predict` | rewriter prompt | cheap |
+| `cypher` | `Predict` | Cypher generation prompt | cheap |
+| `synthesize` | `ChainOfThought` | synthesizer prompt | strong |
+| `verify` | `Predict` | *(new — groundedness gate)* | cheap |
+
+**Off by default.** `ASK_DSPY=1` opts in. Every program returns `None` on any failure and the caller falls back to the original LangChain prompt, so enabling it cannot produce a 500.
+
+```
+ASK_DSPY=1                 serve answers from DSPy
+DSPY_TIER=mixed|cheap|strong   which model serves which program
+DSPY_CHEAP / DSPY_STRONG      override the two model names
+ASK_DSPY_SHADOW=1         run DSPy, discard the result, log agreement
+ASK_NO_GATES=1            always run the rewriter (measures the gate)
+ASK_NO_SPECULATE=1        never overlap retrieval with Cypher generation
+```
+
+### Latency and cost measures
+
+Two independent of DSPy:
+
+- **Rewriter gate** (`chat_engine/gates.py`) — skips the rewriter's model call when the question is already self-contained. Skipping is only safe with no history, or with a question naming its own target; a dangling pronoun like "What does it return?" still goes to the model.
+- **Speculative retrieval** (`chat_engine/speculate.py`) — starts the unfiltered vector search alongside Cypher generation on the hybrid path, hiding ~293ms. Graph-only questions skip it, since a meaningful graph result goes straight to the synthesizer and the search would be wasted.
+
+The router also caches by query text, so a repeated question costs one fewer model call.
+
+### Optimising
+
+```bash
+# regenerate the eval set from live graph state (labels are derived, not hand-written)
+uv run python -m src.evaluation.build_eval_set
+
+# score the current prompts
+uv run python -m src.evaluation.optimize --program cypher --mode eval
+
+# compare model tiers on the same split
+uv run python -m src.evaluation.optimize --program cypher --mode eval --tier strong
+
+# optimise, then replay against the held-out split
+uv run python -m src.evaluation.optimize --program cypher --mode optimize
+uv run python -m src.evaluation.optimize --program cypher --mode replay --split test
+```
+
+Cypher is scored by executing the query and comparing returned paths to a gold set derived from live graph state — an objective metric needing no LLM judge, which makes it the cheapest and least noisy optimisation target. Compiled artefacts are written to `src/evaluation/saved/` (gitignored); without one, programs run on their hand-written instructions.
+
+See `docs/dspy-design.md` for the full design, measurements, and what is and is not yet established.
+
+---
+
 ## LLM Fallback Pipeline
 
 `src/backend/services/llm_fallback.py:FallbackChatModel` wraps `ChatOpenAI` with automatic failover to Groq's `llama-3.3-70b-versatile`:

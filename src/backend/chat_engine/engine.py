@@ -40,6 +40,22 @@ class RouterDecision(BaseModel):
     reason: str = Field(..., description="Explanation of why this routing path was selected")
 
 
+def _shadow_compare(dspy_runtime, program: str, legacy, shadowed, reference=None):
+    """Record a shadow comparison, tolerating a runtime that lacks it.
+
+    Shadow bookkeeping is instrumentation: it must never be the reason a
+    question goes unanswered, so a runtime without the method (or a failure
+    inside it) is logged and dropped.
+    """
+    compare = getattr(dspy_runtime, "compare", None)
+    if compare is None:
+        return
+    try:
+        compare(program, legacy, shadowed, reference)
+    except Exception as e:
+        logger.debug(f"[shadow] compare({program}) failed: {type(e).__name__}: {e}")
+
+
 def _route_to_state(decision: str) -> str:
     """Map a router decision onto the value AgentState carries.
 
@@ -117,16 +133,35 @@ class AnswerEngine:
             ("user", "Context:\n{context}" + history_block + "\n\nQuestion: {query}"),
         ]
 
-    def generate_response(self, query: str, context: str, history_text: str = ""):
+    def generate_response(self, query: str, context: str, history_text: str = "",
+                          dspy_runtime=None):
+        """Answer from context.
+
+        DSPy is tried first when enabled. It returns None on any failure, so
+        the prompt below stays the fallback rather than becoming dead code --
+        which matters because it is also the shadow-mode comparison target.
+        """
+        if dspy_runtime is not None:
+            dspy_answer = dspy_runtime.synthesize(query, context, history_text)
+            if dspy_answer:
+                return ResponseModel(
+                    answer=dspy_answer["answer"],
+                    score=dspy_answer["score"],
+                    sources=dspy_answer["sources"],
+                )
+
         history_block = f"\n\nConversation history:\n{history_text}" if history_text else ""
         chain = ChatPromptTemplate.from_messages(
             self._messages(query, context, history_text)
         ) | self.llm
-        return chain.invoke({
+        result = chain.invoke({
             "context": context,
             "history_block": history_block,
             "query": query,
         })
+        if dspy_runtime is not None:
+            _shadow_compare(dspy_runtime, "synthesize", result.answer, query, context)
+        return result
 
 
 def format_documents(graph_data: list[dict], vector_data: list[dict], decision: str) -> str:
@@ -170,12 +205,13 @@ class ChatWorkflow:
         self.files = files
         self.llm = llm
 
-        self.query_engine = QueryEngine(repo_id=repo_id, db_client=None, llm=llm)
+        self.dspy = DspyRuntime.get()
+        self.query_engine = QueryEngine(repo_id=repo_id, db_client=None, llm=llm,
+                                        dspy_runtime=self.dspy)
         self.vector_store = VectorStore(files=files, collection_name=f"repo_{repo_id}")
         self.query_engine.db_client = self.vector_store
 
         self.answer_engine = AnswerEngine(llm)
-        self.dspy = DspyRuntime.get()
         self.app = self._build_graph()
 
         model_name = getattr(llm, 'model_name', str(llm.__class__.__name__))
@@ -263,6 +299,7 @@ class ChatWorkflow:
 
             router_decision_val = _route_to_state(res.decision)
             logger.info(f"[router] -> {router_decision_val} (reason: {res.reason[:80]})")
+            _shadow_compare(self.dspy, "route", router_decision_val, "graph_only")
 
             return {
                 "router_decision": router_decision_val,
@@ -300,7 +337,18 @@ class ChatWorkflow:
 
         logger.debug(f"[rewriter] Rewriting query with {len(history)} history turns")
 
+        history_text = _format_history(history)
         try:
+            dspy_result = self.dspy.rewrite(state["user_query"], history_text)
+            if dspy_result:
+                logger.debug(
+                    f"[rewriter] dspy -> \"{dspy_result[:60]}...\""
+                )
+                return {
+                    "rewritten_query": dspy_result,
+                    "current_agent": "query_rewriter",
+                }
+
             rewriter_llm = self.llm.with_structured_output(RewrittenQuery)
             history_text = _format_history(history)
             prompt = ChatPromptTemplate.from_messages([
@@ -314,6 +362,7 @@ class ChatWorkflow:
                 "history": history_text,
                 "query": state["user_query"],
             })
+            _shadow_compare(self.dspy, "rewrite", result.rewritten_query, state["user_query"])
             logger.debug(f"[rewriter] \"{state['user_query'][:50]}...\" -> \"{result.rewritten_query[:60]}...\"")
             return {
                 "rewritten_query": result.rewritten_query,
@@ -503,7 +552,9 @@ class ChatWorkflow:
         logger.info(f"[synthesizer] Generating answer from {context_len} chars of context")
 
         try:
-            response = self.answer_engine.generate_response(query, formatted_context, history_text)
+            response = self.answer_engine.generate_response(
+                query, formatted_context, history_text, dspy_runtime=self.dspy
+            )
             answer, confidence = response.answer, response.score
         except Exception as e:
             logger.error(f"[synthesizer] Failed: {type(e).__name__}: {e}")

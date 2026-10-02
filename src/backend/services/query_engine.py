@@ -40,10 +40,15 @@ class ArchitectSubtype(BaseModel):
 
 
 class QueryEngine:
-    def __init__(self, repo_id: str, db_client, uri: str = None, user: str = None, password: str = None, llm=None):
+    def __init__(self, repo_id: str, db_client, uri: str = None, user: str = None, password: str = None, llm=None,
+                 dspy_runtime=None):
         self.db_client = db_client
         self.repo_id = repo_id
         self.llm = llm
+        # Set by ChatWorkflow. Typed loosely and left optional so QueryEngine
+        # stays constructible without DSPy and free of a circular import
+        # (chat_engine imports this module).
+        self.dspy_runtime = dspy_runtime
 
         # The lower-case "NEO4j_*" spellings never matched a real env var (typo)
         # and always fell through to the correct one; ruff's SIM112 flagged them.
@@ -377,6 +382,24 @@ class QueryEngine:
                 return result
 
         logger.debug("[graph] No template match — using LLM-generated Cypher")
+
+        # DSPy first, if enabled. Injected rather than imported so that
+        # query_engine stays independent of the chat engine (which imports it),
+        # and so the legacy prompt below remains the fallback.
+        if self.dspy_runtime is not None and self.dspy_runtime.enabled:
+            dspy_cypher = self.dspy_runtime.cypher(query, self.repo_id)
+            if dspy_cypher:
+                result = self._execute_generated_cypher(dspy_cypher, query)
+                if result is not None:
+                    # Imported here, not at module scope: chat_engine imports
+                    # this module, so a top-level import would be circular.
+                    from src.backend.chat_engine.engine import _shadow_compare
+
+                    _shadow_compare(self.dspy_runtime, "cypher", result, dspy_cypher)
+                    return result
+                # Generated, but it did not run. Fall through to the legacy
+                # path rather than reporting an empty answer.
+
         structured_llm = self.llm.with_structured_output(CypherQuery)
 
         index = self._load_file_index()
@@ -446,16 +469,30 @@ class QueryEngine:
             ("user", f"Generate Cypher for: {query}")
         ])
 
+        output = self._execute_generated_cypher(response.cypher, query)
+        if output is None:
+            return None
+        self._graph_cache[query] = output
+        return output
+
+    def _execute_generated_cypher(self, generated: str, query: str) -> dict | None:
+        """Sanitize, parameterize and run one model-generated query.
+
+        Shared by the DSPy and legacy paths so both get identical security
+        handling. The order matters and is not compressible: `sanitize_cypher`
+        rejects writes, `parameterize_literals` then lifts every remaining
+        literal so the executed text is fully under our control. A query that
+        fails either step returns None, which tells the caller to fall back
+        rather than to report an empty answer.
+        """
         try:
-            safe_cypher = self.sanitize_cypher(response.cypher)
+            safe_cypher = self.sanitize_cypher(generated)
             if not safe_cypher:
                 logger.warning(f"[Sanitize] Rejected generated Cypher for query: {query}")
-                logger.warning(f"  Generated Cypher: {response.cypher}")
+                logger.warning(f"  Generated Cypher: {generated}")
                 return None
 
             safe_cypher = self.resolve_names_in_cypher(safe_cypher)
-            # Last step before execution: lift every remaining literal into a
-            # parameter, so the executed text is fully under our control.
             safe_cypher, params = self.parameterize_literals(safe_cypher)
             params["repo_id"] = self.repo_id
 
@@ -467,20 +504,17 @@ class QueryEngine:
                 "f.path" in data[0]
             )
 
-            output = {
-                "is_fallback": is_fallback, "data": data,
-                "response": response.cypher, "method": "llm",
+            return {
+                "is_fallback": is_fallback,
+                "data": data,
+                "response": generated,
+                "method": "llm",
                 "timestamp": time.time(),
             }
-
-            self._graph_cache[query] = output
-            logger.debug(f"[graph] LLM Cypher returned {len(data)} rows")
-            return output
-
         except Exception as e:
             logger.error("[Error] Graph query failed:")
             logger.error(f"  Query: {query}")
-            logger.error(f"  Generated Cypher: {response.cypher}")
+            logger.error(f"  Generated Cypher: {generated}")
             logger.error(f"  Exception: {type(e).__name__}: {e}")
             for line in traceback.format_exc().splitlines():
                 logger.error(f"  {line}")

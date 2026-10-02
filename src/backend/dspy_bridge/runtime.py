@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from collections import defaultdict
@@ -29,6 +30,35 @@ from pathlib import Path
 logger = logging.getLogger("askmyrepo.dspy")
 
 SAVED_DIR = Path(__file__).resolve().parents[2] / "evaluation" / "saved"
+
+
+def _truthy(value: str | None, default: bool = False) -> bool:
+    """Env-var boolean.
+
+    os.getenv returns a string, and "0" is truthy in Python -- so a plain
+    `if os.getenv(...)` treats "0" as enabled. That is the exact bug that made
+    ASK_DSPY_SHADOW untrustworthy: setting it to 0 could not turn it off.
+    """
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _similar(a: str, b: str) -> bool:
+    """Token-overlap agreement between two answers.
+
+    Crude on purpose: shadow mode runs on the request path, and the purpose is
+    to catch gross divergence -- a truncated answer, a wrong file, an empty
+    response -- not to adjudicate quality. Sets of words are used rather than
+    order, since two correct answers rarely phrase things identically.
+    """
+    if not a.strip() or not b.strip():
+        return False
+    ta = set(re.findall(r"\w+", a.lower()))
+    tb = set(re.findall(r"\w+", b.lower()))
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / len(ta | tb) >= 0.5
 
 
 class Stats:
@@ -86,10 +116,16 @@ class DspyRuntime:
         from src.backend.dspy_bridge.config import tier_for
 
         self.tier = tier_for(tier)
+        # Shadow is opt-in, parsed as a bool. Two reasons it is not defaulted
+        # on: reading the raw env string would make "0" truthy and therefore
+        # impossible to turn off, and a shadow run makes a real model call per
+        # request whose result is discarded. Turning that on by default would
+        # bill every request for nothing, which is the opposite of what the
+        # default configuration should do.
         self.shadow = (
-            os.getenv("ASK_DSPY_SHADOW", "1" if not os.getenv("ASK_DSPY") else "0")
+            _truthy(os.getenv("ASK_DSPY_SHADOW"))
             if shadow is None
-            else shadow
+            else bool(shadow)
         )
         self._programs: dict = {}
         self._lock = threading.Lock()
@@ -110,13 +146,18 @@ class DspyRuntime:
         return cls._instance
 
     @property
+    def enabled_flag(self) -> bool:
+        """Whether ASK_DSPY opts in. Unset means off."""
+        return _truthy(os.getenv("ASK_DSPY"))
+
+    @property
     def enabled(self) -> bool:
         """Whether DSPy should serve answers at all.
 
         `ASK_DSPY=1` opts in. Unset means off, so the default install behaves
         exactly as it did before this module existed.
         """
-        return os.getenv("ASK_DSPY", "0") == "1"
+        return self.enabled_flag
 
     # ── program access ──────────────────────────────────────────────────────
     def _build(self) -> dict:
@@ -164,15 +205,32 @@ class DspyRuntime:
 
     # ── call wrapper ────────────────────────────────────────────────────────
     def _call(self, name: str, fn):
-        """Run a program, timing it, converting any failure into `None`."""
+        """Run a program, timing it, converting any failure into `None`.
+
+        Shadow mode runs the program and then discards the result, so the
+        legacy path still serves the answer. That is the whole point: it
+        collects evidence about whether cutting over is safe, without
+        changing what any user sees.
+
+        Shadow mode does *not* require ASK_DSPY=1. Gating it on `enabled` --
+        which is what this function used to do -- meant shadow mode could never
+        run at all, since `enabled` defaults to false and shadow is off too.
+        """
+        if self.shadow:
+            self._invoke(name, fn)
+            return None
         if not self.enabled:
             return None
+        return self._invoke(name, fn)
+
+    def _invoke(self, name: str, fn):
+        """Actually call the program. Returns None on any failure."""
         program = self.program(name)
         if program is None:
             return None
         start = time.perf_counter()
         try:
-            out = program(**fn[1]) if isinstance(fn, tuple) else fn(program)
+            out = fn(program)
             self.stats.record(name, (time.perf_counter() - start) * 1000, True)
             return out
         except Exception as e:
@@ -185,6 +243,32 @@ class DspyRuntime:
 
     def record_agreement(self, program: str, agreed: bool) -> None:
         self._shadow_agreement[program].append(agreed)
+
+    def compare(self, program: str, legacy: object, shadowed: object,
+                reference: str | None = None) -> None:
+        """Record how a shadowed DSPy result compares to the legacy one.
+
+        Only does anything when shadow mode is on. In shadow mode the legacy
+        path always serves the answer, so this is the only place the DSPy
+        output is ever inspected -- and the only evidence available for
+        deciding whether to cut over.
+
+        Agreement is deliberately a cheap lexical check rather than another
+        model call. A shadow run already costs a full DSPy call per request;
+        adding a judge on top would make the measurement cost more than the
+        thing it measures, and an LLM judge would be judging a cheap model's
+        output with another cheap model.
+        """
+        if not self.shadow:
+            return
+        agreed = _similar(str(legacy or ""), str(shadowed or ""))
+        self.record_agreement(program, agreed)
+        if not agreed:
+            logger.info(
+                "[shadow] %s diverged (legacy %.0f chars vs dspy %.0f)%s",
+                program, len(str(legacy or "")), len(str(shadowed or "")),
+                f" ref={reference[:40]!r}" if reference else "",
+            )
 
     def shadow_report(self) -> dict:
         out = {}
@@ -206,9 +290,12 @@ class DspyRuntime:
 
     # ── the five operations ─────────────────────────────────────────────────
     def route(self, question: str):
-        """-> (route, reason) or None. Route is graph|architecture|hybrid."""
-        if not self.enabled:
-            return None
+        """-> (route, reason) or None. Route is graph|architecture|hybrid.
+
+        The enabled check lives in _call, which also handles shadow mode.
+        Duplicating it here would mean shadow mode could never produce a
+        result to compare.
+        """
         out = self._call("route", lambda p: p(question=question))
         if out is None:
             return None
@@ -262,8 +349,6 @@ class DspyRuntime:
 
     def verify(self, question: str, context: str, draft: str):
         """-> (verdict, worst_gap) or None."""
-        if not self.enabled:
-            return None
         out = self._call(
             "verify",
             lambda p: p(question=question, context=context, draft=draft),

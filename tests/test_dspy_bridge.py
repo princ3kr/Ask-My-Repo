@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
+from langchain_core.runnables import Runnable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -537,6 +538,217 @@ class TestVerifyGate:
 
 
 # ── tier assignment ─────────────────────────────────────────────────────────
+class _FakeLLM(Runnable):
+    """A minimal LangChain Runnable.
+
+    Subclasses `Runnable` rather than faking `__or__`, because the pipe
+    operator type-checks its operand and rejects anything that is not
+    Runnable-like. Also serves as `llm.with_structured_output(...)`, which is
+    what every legacy path calls first.
+    """
+
+    def __init__(self, result=None, boom: str | None = None):
+        super().__init__()
+        self._result = result
+        self._boom = boom
+
+    def with_structured_output(self, _schema):
+        return self
+
+    def invoke(self, _payload, config=None, **kwargs):
+        if self._boom:
+            raise AssertionError(self._boom)
+        return self._result
+
+
+class TestAllFiveWired:
+    """All five programs must be reachable from the engine. Three of them
+    (rewrite, cypher, synthesize) were defined but never called, so DSPy was
+    barely integrated and the cost argument did not apply."""
+
+    def test_rewrite_reaches_dspy(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY", "1")
+        monkeypatch.setenv("ASK_DSPY_SHADOW", "0")
+        from src.backend.chat_engine.engine import ChatWorkflow
+        from src.backend.chat_engine import gates
+
+        monkeypatch.setattr(gates, "needs_rewrite", lambda q, h: True)
+        wf = ChatWorkflow.__new__(ChatWorkflow)
+        wf.dspy = type("D", (), {
+            "enabled": True,
+            "rewrite": staticmethod(lambda q, h: "standalone version"),
+        })()
+        state = {"user_query": "what about it?", "user_history": [{"role": "user", "content": "x"}]}
+        assert wf.query_rewriter_node(state)["rewritten_query"] == "standalone version"
+
+    def test_rewrite_falls_back_to_langchain(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY", "1")
+        from src.backend.chat_engine.engine import ChatWorkflow, RewrittenQuery
+        from src.backend.chat_engine import gates
+        from tests.test_dspy_bridge import _FakeLLM
+
+        monkeypatch.setattr(gates, "needs_rewrite", lambda q, h: True)
+        wf = ChatWorkflow.__new__(ChatWorkflow)
+        wf.dspy = type("D", (), {"enabled": True, "rewrite": staticmethod(lambda q, h: None)})()
+        wf.llm = _FakeLLM(RewrittenQuery(rewritten_query="legacy rewrite"))
+        state = {"user_query": "what about it?", "user_history": [{"role": "user", "content": "x"}]}
+        assert wf.query_rewriter_node(state)["rewritten_query"] == "legacy rewrite"
+
+    def test_synthesize_reaches_dspy(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY", "1")
+        from src.backend.chat_engine.engine import AnswerEngine
+        from tests.test_dspy_bridge import _FakeLLM
+
+        runtime = type("D", (), {
+            "enabled": True,
+            "synthesize": staticmethod(
+                lambda q, c, h="": {"answer": "dspy answer", "score": 0.9, "sources": "a.py"}
+            ),
+        })()
+        out = AnswerEngine(
+            _FakeLLM(None, boom="legacy path ran while DSPy was available")
+        ).generate_response("q", "ctx", "", dspy_runtime=runtime)
+        assert out.answer == "dspy answer"
+        assert out.score == 0.9
+
+    def test_synthesize_falls_back_to_langchain(self, monkeypatch):
+        from src.backend.chat_engine.engine import AnswerEngine, ResponseModel
+        from tests.test_dspy_bridge import _FakeLLM
+
+        runtime = type("D", (), {
+            "enabled": True,
+            "synthesize": staticmethod(lambda q, c, h="": None),
+            "compare": staticmethod(lambda *a, **k: None),
+        })()
+        out = AnswerEngine(
+            _FakeLLM(ResponseModel(answer="legacy answer", score=0.5, sources="b.py"))
+        ).generate_response("q", "ctx", "", dspy_runtime=runtime)
+        assert out.answer == "legacy answer"
+
+    def test_cypher_reaches_dspy_and_is_sanitized(self, monkeypatch):
+        """The DSPy path must go through the same sanitizer as the legacy one,
+        or it becomes a write hole."""
+        from src.backend.services.query_engine import QueryEngine
+
+        eng = QueryEngine.__new__(QueryEngine)
+        eng.repo_id = "r"
+        eng._graph_cache = {}
+
+        class _Runtime:
+            enabled = True
+
+            def cypher(self, query, repo_id):
+                return "MATCH (f:File) DELETE f"
+
+            def compare(self, *a, **k):
+                pass
+
+        eng.dspy_runtime = _Runtime()
+        # Write clause -> sanitizer rejects -> no execution.
+        assert eng._execute_generated_cypher("MATCH (f:File) DELETE f", "q") is None
+
+    def test_cypher_falls_through_when_generated_query_fails(self, monkeypatch):
+        from src.backend.services.query_engine import QueryEngine
+
+        eng = QueryEngine.__new__(QueryEngine)
+        eng.repo_id = "r"
+        eng._graph_cache = {}
+
+        class _Runtime:
+            enabled = True
+
+            def cypher(self, query, repo_id):
+                return "THIS IS NOT CYPHER"
+
+            def compare(self, *a, **k):
+                pass
+
+        eng.dspy_runtime = _Runtime()
+        # Returns None so graph_search falls through to the legacy prompt
+        # rather than reporting an empty answer.
+        assert eng._execute_generated_cypher("THIS IS NOT CYPHER", "q") is None
+
+    def test_execute_generated_cypher_rejects_writes(self):
+        from src.backend.services.query_engine import QueryEngine
+
+        eng = QueryEngine.__new__(QueryEngine)
+        eng.repo_id = "r"
+        for bad in ("MATCH (n) DELETE n", "CREATE (n:File)", "MATCH (n) SET n.x=1"):
+            assert eng._execute_generated_cypher(bad, "q") is None, bad
+
+
+class TestShadowMode:
+    """Shadow mode is the mechanism for deciding whether to cut over, so it
+    has to actually run. It previously could not: `_call` gated on `enabled`,
+    which defaults false, and `shadow` was the raw env string."""
+
+    def test_shadow_defaults_off(self, monkeypatch):
+        monkeypatch.delenv("ASK_DSPY_SHADOW", raising=False)
+        monkeypatch.delenv("ASK_DSPY", raising=False)
+        from src.backend.dspy_bridge.runtime import DspyRuntime
+
+        assert DspyRuntime().shadow is False
+
+    def test_zero_string_disables_shadow(self, monkeypatch):
+        """"0" is truthy in Python, so the raw string could not be turned off."""
+        monkeypatch.setenv("ASK_DSPY_SHADOW", "0")
+        from src.backend.dspy_bridge.runtime import DspyRuntime
+
+        assert DspyRuntime().shadow is False
+
+    def test_truthy_values(self, monkeypatch):
+        from src.backend.dspy_bridge.runtime import _truthy
+
+        for v in ("1", "true", "TRUE", "yes", "on"):
+            assert _truthy(v) is True, v
+        for v in ("0", "false", "no", "off", ""):
+            assert _truthy(v) is False, v
+        assert _truthy(None) is False
+
+    def test_shadow_runs_the_program_but_returns_none(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY_SHADOW", "1")
+        from src.backend.dspy_bridge.runtime import DspyRuntime
+
+        rt = DspyRuntime()
+        ran = []
+
+        rt.program = lambda name: (lambda **kw: ran.append(kw) or type(
+            "O", (), {"standalone_question": "x"}
+        )())
+        # DSPy is NOT serving, yet the program still runs and still returns None.
+        assert rt.enabled is False
+        assert rt.rewrite("q", "h") is None
+        assert ran, "shadow mode did not invoke the program"
+        assert rt.stats.summary()["rewrite"]["calls"] == 1
+
+    def test_shadow_records_agreement(self, monkeypatch):
+        monkeypatch.setenv("ASK_DSPY_SHADOW", "1")
+        from src.backend.dspy_bridge.runtime import DspyRuntime
+
+        rt = DspyRuntime()
+        rt.compare("synthesize", "the file does X", "the file does X")
+        rt.compare("synthesize", "imports parser", "quantum field theory")
+        report = rt.shadow_report()["synthesize"]
+        assert report["compared"] == 2
+        assert report["agree_rate"] == 0.5
+
+    def test_compare_is_inert_without_shadow(self, monkeypatch):
+        monkeypatch.delenv("ASK_DSPY_SHADOW", raising=False)
+        from src.backend.dspy_bridge.runtime import DspyRuntime
+
+        rt = DspyRuntime()
+        rt.compare("route", "a", "b")
+        assert rt.shadow_report() == {}
+
+    def test_similar_detects_divergence(self):
+        from src.backend.dspy_bridge.runtime import _similar
+
+        assert _similar("imports repo_parser", "imports repo_parser")
+        assert not _similar("imports repo_parser", "explains the BPE tokenizer")
+        assert not _similar("", "anything")
+        assert not _similar("anything", "")
+
+
 class TestRouterCache:
     """`_router_cache` was written on every route and read by nothing, so the
     router re-paid for an LLM call on any repeated question. Reading it turns a
