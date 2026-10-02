@@ -1,0 +1,99 @@
+"""DSPy language-model configuration, with an explicit cost tier per program.
+
+Latency and cost are both dominated by *which* model serves a step, so the tier
+is a property of the program rather than a global setting. `DSPY_TIER` swaps
+the whole assignment at once, which is how the cheap-model experiment is run
+without touching call sites.
+
+Two independent knobs:
+  DSPY_TIER      cheap | strong   which assignment to use
+  DSPY_STRONG    override the strong model
+  DSPY_CHEAP     override the cheap model
+"""
+from __future__ import annotations
+
+import logging
+import os
+
+import dspy
+
+logger = logging.getLogger("askmyrepo.dspy")
+
+STRONG_MODEL = os.getenv("DSPY_STRONG", "openai/gpt-4o")
+CHEAP_MODEL = os.getenv("DSPY_CHEAP", "openai/gpt-4o-mini")
+
+PROGRAMS = ("route", "rewrite", "cypher", "synthesize", "verify")
+
+# Three named assignments, all of which define every program. A partial mapping
+# would make `model_for` fall through to a default that nobody chose, which is
+# how the cheap model ended up serving synthesis by accident.
+#
+#   strong — everything on the large model. The baseline to measure against.
+#   mixed  — the shipping default. Synthesis keeps the large model because it
+#            is the one step whose output quality the user actually reads;
+#            routing, rewriting, Cypher and verification move to the small one.
+#   cheap  — everything on the small model. The experiment that answers
+#            "how much does the small model cost us in quality?"
+TIERS: dict[str, dict[str, str]] = {
+    "strong": dict.fromkeys(PROGRAMS, STRONG_MODEL),
+    "mixed": {**dict.fromkeys(
+        ("route", "rewrite", "cypher", "verify"), CHEAP_MODEL
+    ), "synthesize": STRONG_MODEL},
+    "cheap": dict.fromkeys(PROGRAMS, CHEAP_MODEL),
+}
+
+# An unknown tier is a config mistake, and falling through silently would run
+# work on a model nobody selected. Treat it as "mixed", the default.
+DEFAULT_TIER = "mixed"
+
+
+def tier_for(name: str | None = None) -> str:
+    return (name or os.getenv("DSPY_TIER", DEFAULT_TIER)).lower()
+
+_configured: dict[str, dspy.LM] = {}
+
+
+def assignment_for(tier: str | None = None) -> dict[str, str]:
+    """The full program -> model mapping for a tier."""
+    tier = tier_for(tier)
+    if tier not in TIERS:
+        logger.warning(
+            "Unknown DSPY_TIER=%r; using %r. Valid tiers: %s",
+            tier, DEFAULT_TIER, ", ".join(sorted(TIERS)),
+        )
+        tier = DEFAULT_TIER
+    return TIERS[tier]
+
+
+def configure_lms(tier: str | None = None) -> dict[str, dspy.LM]:
+    """Build (and cache) one LM per distinct model name, and set the default.
+
+    One `dspy.LM` per model, not per program: two programs on the same model
+    share a client, which matters because DSPy's disk cache and HTTP
+    connection pool both live on it.
+    """
+    assignment = assignment_for(tier)
+    lms = {name: _lm_for(name) for name in sorted(set(assignment.values()))}
+    # The default is the model synthesis uses, so an un-annotated call lands on
+    # the tier-appropriate one.
+    dspy.configure(lm=lms[assignment["synthesize"]], adapter=dspy.ChatAdapter())
+
+    logger.info(
+        "DSPy configured (tier=%s): %s",
+        tier_for(tier),
+        ", ".join(f"{k}={v}" for k, v in sorted(assignment.items())),
+    )
+    return lms
+
+
+def _lm_for(name: str) -> dspy.LM:
+    if name not in _configured:
+        # cache=True is what makes an optimisation run affordable: the
+        # optimiser re-issues identical prefixes constantly.
+        _configured[name] = dspy.LM(name, temperature=0.0, max_tokens=1024, cache=True)
+    return _configured[name]
+
+
+def model_for(program: str, tier: str | None = None) -> str:
+    """Which model a given program should use."""
+    return assignment_for(tier).get(program, STRONG_MODEL)

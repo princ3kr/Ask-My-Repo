@@ -30,7 +30,8 @@ dependencies = [
     "datasets",
     "python-dotenv",
     "fastapi",
-    "uvicorn"
+    "uvicorn",
+    "dspy>=2.6",
 ]
 
 [dependency-groups]

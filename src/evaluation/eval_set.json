@@ -1,0 +1,438 @@
+{
+  "version": 1,
+  "note": "Labels derived from live Neo4j state by build_eval_set.py.",
+  "repos": [
+    "princ3kr-Ask-My-Repo",
+    "princ3kr-Notebook-LM-Mini",
+    "princ3kr-VQAModel"
+  ],
+  "train": [
+    {
+      "qid": "princ3kr-Ask-My-Repo:importers:src/backend/chunking/chunk_builder.py",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files import chunk_builder.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "src/backend/api.py",
+        "src/backend/map/mapper.py"
+      ],
+      "expected_answer": "",
+      "gold": 2
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:importers:src/backend/chunking/repo_parser.py",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files import repo_parser.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/backend/api.py",
+        "src/backend/map/mapper.py",
+        "src/evaluation/eval.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:importers:src/backend/services/llm_fallback.py",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files import llm_fallback.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "src/backend/api.py",
+        "src/backend/map/mapper.py"
+      ],
+      "expected_answer": "",
+      "gold": 2
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:leaves-neighbour:src/backend/chat_engine/engine.py",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files does engine.py import?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/backend/api.py",
+        "src/backend/chat_engine/engine.py",
+        "src/evaluation/eval.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:hub",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which file imports the most other files?",
+      "kind": "graph",
+      "expected_paths": [
+        "src/backend/api.py",
+        "src/backend/map/mapper.py",
+        "src/backend/chat_engine/engine.py",
+        "app.py",
+        "src/evaluation/eval.py"
+      ],
+      "expected_answer": "",
+      "gold": 5
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:entrypoints",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which functions are application entry points?",
+      "kind": "graph",
+      "expected_paths": [
+        "src/backend/api.py"
+      ],
+      "expected_answer": "",
+      "gold": 8
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:classes",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which classes are defined in this repository?",
+      "kind": "graph",
+      "expected_paths": [],
+      "expected_answer": "",
+      "gold": 21
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:behaviour:what",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "What is this project for, in one or two sentences?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A summary of the repository's purpose derived from its files.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:behaviour:file",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "What does README.md do?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the responsibility of README.md.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:importers:src/database/student_db.py",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files import student_db.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/database/__init__.py",
+        "src/services/tutor_service.py"
+      ],
+      "expected_answer": "",
+      "gold": 3
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:importers:src/models/concept.py",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files import concept.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/models/__init__.py",
+        "src/services/graph_service.py",
+        "src/services/llm_service.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:importers:src/models/diagnoses.py",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files import diagnoses.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "src/models/__init__.py",
+        "src/services/diagnoser_service.py",
+        "src/services/tutor_service.py"
+      ],
+      "expected_answer": "",
+      "gold": 3
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:leaves-neighbour:src/database/neo4j_conn.py",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files does neo4j_conn.py import?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/database/__init__.py",
+        "src/services/diagnoser_service.py",
+        "src/services/graph_service.py",
+        "src/services/planner_service.py",
+        "src/services/tutor_service.py"
+      ],
+      "expected_answer": "",
+      "gold": 6
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:hub",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which file imports the most other files?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/services/tutor_service.py",
+        "src/services/__init__.py",
+        "src/models/__init__.py",
+        "src/database/__init__.py"
+      ],
+      "expected_answer": "",
+      "gold": 5
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:classes",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which classes are defined in this repository?",
+      "kind": "graph",
+      "expected_paths": [],
+      "expected_answer": "",
+      "gold": 15
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:behaviour:what",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "What is this project for, in one or two sentences?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A summary of the repository's purpose derived from its files.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:behaviour:flow",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "How does a request flow through this codebase, from entry point to work being done?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the call path from an entry point to a sink.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-VQAModel:importers:models/attention.py",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files import attention.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "models/__init__.py",
+        "models/vqa_model.py"
+      ],
+      "expected_answer": "",
+      "gold": 2
+    },
+    {
+      "qid": "princ3kr-VQAModel:importers:models/encoders.py",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files import encoders.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "models/__init__.py",
+        "models/vqa_model.py"
+      ],
+      "expected_answer": "",
+      "gold": 2
+    },
+    {
+      "qid": "princ3kr-VQAModel:importers:models/fusion.py",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files import fusion.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "models/__init__.py",
+        "models/vqa_model.py"
+      ],
+      "expected_answer": "",
+      "gold": 2
+    },
+    {
+      "qid": "princ3kr-VQAModel:leaves-neighbour:data/vqa_dataset.py",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files does vqa_dataset.py import?",
+      "kind": "graph",
+      "expected_paths": [
+        "data/__init__.py",
+        "scripts/evaluate.py",
+        "scripts/test_loading.py",
+        "scripts/train.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-VQAModel:hub",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which file imports the most other files?",
+      "kind": "graph",
+      "expected_paths": [
+        "models/__init__.py",
+        "models/vqa_model.py",
+        "scripts/evaluate.py",
+        "scripts/train.py",
+        "app.py"
+      ],
+      "expected_answer": "",
+      "gold": 5
+    },
+    {
+      "qid": "princ3kr-VQAModel:classes",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which classes are defined in this repository?",
+      "kind": "graph",
+      "expected_paths": [],
+      "expected_answer": "",
+      "gold": 6
+    },
+    {
+      "qid": "princ3kr-VQAModel:behaviour:what",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "What is this project for, in one or two sentences?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A summary of the repository's purpose derived from its files.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-VQAModel:behaviour:flow",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "How does a request flow through this codebase, from entry point to work being done?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the call path from an entry point to a sink.",
+      "gold": ""
+    }
+  ],
+  "test": [
+    {
+      "qid": "princ3kr-Ask-My-Repo:importers:src/backend/chat_engine/engine.py",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files import engine.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/backend/api.py",
+        "src/backend/chat_engine/engine.py",
+        "src/evaluation/eval.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:leaves",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "Which files import no other local module?",
+      "kind": "graph",
+      "expected_paths": [
+        "README.md",
+        "src/backend/agent_state/__init__.py",
+        "src/backend/agent_state/state.py",
+        "src/backend/chat_engine/__init__.py",
+        "src/backend/chunking/__init__.py",
+        "src/backend/chunking/chunk_builder.py",
+        "src/backend/chunking/repo_parser.py",
+        "src/backend/job_status.py",
+        "src/backend/map/__init__.py",
+        "src/backend/services/__init__.py",
+        "src/backend/services/llm_fallback.py",
+        "src/backend/services/query_engine.py"
+      ],
+      "expected_answer": "",
+      "gold": 15
+    },
+    {
+      "qid": "princ3kr-Ask-My-Repo:behaviour:flow",
+      "repo_id": "princ3kr-Ask-My-Repo",
+      "question": "How does a request flow through this codebase, from entry point to work being done?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the call path from an entry point to a sink.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:importers:src/database/neo4j_conn.py",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files import neo4j_conn.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "app.py",
+        "src/database/__init__.py",
+        "src/services/diagnoser_service.py",
+        "src/services/graph_service.py",
+        "src/services/planner_service.py",
+        "src/services/tutor_service.py"
+      ],
+      "expected_answer": "",
+      "gold": 6
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:leaves",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "Which files import no other local module?",
+      "kind": "graph",
+      "expected_paths": [
+        "README.md",
+        "src/__init__.py",
+        "src/database/neo4j_conn.py",
+        "src/database/student_db.py",
+        "src/models/concept.py",
+        "src/models/diagnoses.py",
+        "src/models/intent.py",
+        "src/models/state.py",
+        "src/services/tutor_lesson_utils.py"
+      ],
+      "expected_answer": "",
+      "gold": 9
+    },
+    {
+      "qid": "princ3kr-Notebook-LM-Mini:behaviour:file",
+      "repo_id": "princ3kr-Notebook-LM-Mini",
+      "question": "What does README.md do?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the responsibility of README.md.",
+      "gold": ""
+    },
+    {
+      "qid": "princ3kr-VQAModel:importers:data/vqa_dataset.py",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files import vqa_dataset.py?",
+      "kind": "graph",
+      "expected_paths": [
+        "data/__init__.py",
+        "scripts/evaluate.py",
+        "scripts/test_loading.py",
+        "scripts/train.py"
+      ],
+      "expected_answer": "",
+      "gold": 4
+    },
+    {
+      "qid": "princ3kr-VQAModel:leaves",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "Which files import no other local module?",
+      "kind": "graph",
+      "expected_paths": [
+        "README.md",
+        "data/vqa_dataset.py",
+        "models/attention.py",
+        "models/encoders.py",
+        "models/fusion.py",
+        "notebooks/README.md",
+        "scripts/build_vocab.py",
+        "utils/metrics.py"
+      ],
+      "expected_answer": "",
+      "gold": 8
+    },
+    {
+      "qid": "princ3kr-VQAModel:behaviour:file",
+      "repo_id": "princ3kr-VQAModel",
+      "question": "What does README.md do?",
+      "kind": "behaviour",
+      "expected_paths": [],
+      "expected_answer": "A description of the responsibility of README.md.",
+      "gold": ""
+    }
+  ]
+}

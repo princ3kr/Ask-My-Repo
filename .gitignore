@@ -60,3 +60,8 @@ data/
 
 # NOTE: uv.lock is deliberately NOT ignored. It pins the dependency set, so
 # committing it keeps `uv sync` reproducible for everyone.
+
+# DSPy optimisation artefacts: prompts + demos derived from the eval set, and
+# the eval set itself. Regenerate with `python -m src.evaluation.build_eval_set`
+# and `python -m src.evaluation.optimize --mode optimize`.
+src/evaluation/saved/

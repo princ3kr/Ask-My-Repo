@@ -9,6 +9,8 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel, Field
 
 from src.backend.agent_state.state import AgentState, GraphResult
+from src.backend.chat_engine import gates, speculate
+from src.backend.dspy_bridge.runtime import DspyRuntime
 from src.backend.services.query_engine import QueryEngine
 from src.backend.services.vector_db import VectorStore
 
@@ -142,6 +144,7 @@ class ChatWorkflow:
         self.query_engine.db_client = self.vector_store
 
         self.answer_engine = AnswerEngine(llm)
+        self.dspy = DspyRuntime.get()
         self.app = self._build_graph()
 
         model_name = getattr(llm, 'model_name', str(llm.__class__.__name__))
@@ -152,6 +155,18 @@ class ChatWorkflow:
         logger.debug(f"[router] Routing query: \"{query[:60]}...\"")
 
         try:
+            dspy_result = self.dspy.route(query)
+            if dspy_result is not None:
+                router_decision_val, reason = dspy_result
+                logger.info(
+                    f"[router] dspy -> {router_decision_val} (reason: {reason[:80]})"
+                )
+                return {
+                    "router_decision": router_decision_val,
+                    "reason": reason,
+                    "current_agent": "router",
+                }
+
             router_llm = self.llm.with_structured_output(RouterDecision)
             router_prompt = ChatPromptTemplate.from_messages([
                 ('system', """You are a query router for code repository Q&A.
@@ -231,6 +246,16 @@ class ChatWorkflow:
                 "current_agent": "query_rewriter",
             }
 
+        # A question with no back-reference, or one that names its target, is
+        # already self-contained. Rewriting it would spend a model call to
+        # produce the input unchanged.
+        if not gates.needs_rewrite(state["user_query"], history):
+            logger.debug("[rewriter] Gate: question is self-contained — skipping call")
+            return {
+                "rewritten_query": state["user_query"],
+                "current_agent": "query_rewriter",
+            }
+
         logger.debug(f"[rewriter] Rewriting query with {len(history)} history turns")
 
         try:
@@ -279,15 +304,24 @@ class ChatWorkflow:
                     timestamp=res.get("timestamp", time.time()),
                 )
 
+                # Vector enrichment is a separate try. Sharing the block with
+                # the graph search meant one vector failure discarded graph
+                # records that had already been fetched successfully.
                 critical_files = self.query_engine.extract_critical_path_files(res, limit=4)
                 if critical_files:
-                    logger.debug(f"[architect] Enriching with vector data for {len(critical_files)} files")
-                    vector_data = self.vector_store.vector_search(query, filenames=critical_files)
-                    reranked = self.vector_store.rerank(vector_data, query, top_k=4)
-                    vector_res = [
-                        {"metadata": item[0], "score": float(item[1]), "content": item[2]}
-                        for item in reranked
-                    ]
+                    logger.debug(
+                        f"[architect] Enriching with vector data for {len(critical_files)} files"
+                    )
+                    try:
+                        vector_data = self.vector_store.vector_search(
+                            query, filenames=critical_files
+                        )
+                        vector_res = self._rerank_vectors(vector_data, query, top_k=4)
+                    except Exception as ve:
+                        logger.error(
+                            "[architect] vector enrichment failed "
+                            f"({type(ve).__name__}: {ve}); keeping graph result"
+                        )
 
             logger.info(f"[architect] -> {len(graph_res['data']) if graph_res else 0} graph records, {len(vector_res)} vectors")
             return {
@@ -311,6 +345,19 @@ class ChatWorkflow:
         query = state.get("rewritten_query") or state["user_query"]
         logger.debug(f"[graph] Searching Neo4j for: \"{query[:60]}...\"")
 
+        # Cypher generation is the slow part of this node, and an unfiltered vector
+        # search does not need the graph result. On the hybrid path vector
+        # retrieval always runs, so start it now and overlap the two.
+        #
+        # Only hybrid speculates. On the graph path, a meaningful result goes
+        # straight to the synthesizer and the speculative search would be
+        # started, paid for and thrown away.
+        pending = {}
+        if state.get("router_decision") == "hybrid":
+            pending["_vector_future"] = speculate.speculate(
+                lambda: self.vector_store.search(query)
+            )
+
         try:
             res = self.query_engine.graph_search(query)
             graph_res = None
@@ -327,17 +374,45 @@ class ChatWorkflow:
             return {
                 "graph_result": graph_res,
                 "current_agent": "graph",
+                **pending,
             }
         except Exception as e:
             logger.error(f"[graph] Failed: {type(e).__name__}: {e}")
             for line in traceback.format_exc().splitlines():
                 logger.error(f"  {line}")
+            # Drain the speculative future so a later vector_node does not wait
+            # on a search whose result is now pointless.
+            self._discard_future(pending.get("_vector_future"))
             return {
                 "graph_result": None,
                 "current_agent": "graph",
             }
 
+    def _discard_future(self, future) -> None:
+        """Cancel speculative work that nothing will consume."""
+        if future is None:
+            return
+        try:
+            future.cancel()
+        except Exception:
+            pass
+
+    def _rerank_vectors(self, vector_data: list, query: str, top_k: int = 5) -> list:
+        """Rerank raw hits into the shape the state and formatter expect."""
+        reranked = self.vector_store.rerank(vector_data, query, top_k=top_k)
+        return [
+            {"metadata": item[0], "score": float(item[1]), "content": item[2]}
+            for item in reranked
+        ]
+
     def vector_node(self, state: AgentState) -> dict:
+        """Retrieve and rerank code chunks.
+
+        The unfiltered search does not depend on the graph result, so when the
+        graph search is also running it is started speculatively and joined here.
+        `state["_vector_future"]` is set by graph_node; without it this behaves
+        exactly as it did before, running inline.
+        """
         query = state.get("rewritten_query") or state["user_query"]
         graph_res = state.get("graph_result")
         filenames = []
@@ -348,17 +423,17 @@ class ChatWorkflow:
         logger.debug(f"[vector] Searching vectors{', filtered by ' + str(len(filenames)) + ' files' if filenames else ''}")
 
         try:
+            # A filtered search supersedes the speculative one, so only wait on
+            # it when there is nothing to gain from waiting.
             if filenames:
                 vector_data = self.vector_store.vector_search(query, filenames=filenames)
             else:
-                vector_data = self.vector_store.search(query)
+                vector_data = speculate.resolve(
+                    state.get("_vector_future"),
+                    lambda: self.vector_store.search(query),
+                )
 
-            reranked = self.vector_store.rerank(vector_data, query, top_k=5)
-
-            vector_res = [
-                {"metadata": item[0], "score": float(item[1]), "content": item[2]}
-                for item in reranked
-            ]
+            vector_res = self._rerank_vectors(vector_data, query, top_k=5)
             logger.debug(f"[vector] -> {len(vector_res)} chunks after rerank")
             return {
                 "vector_result": vector_res,
@@ -387,12 +462,7 @@ class ChatWorkflow:
 
         try:
             response = self.answer_engine.generate_response(query, formatted_context, history_text)
-            logger.info(f"[synthesizer] Answer generated ({len(response.answer)} chars, confidence={response.score:.2f})")
-            return {
-                "context": formatted_context,
-                "final_answer": response.answer,
-                "current_agent": "synthesizer",
-            }
+            answer, confidence = response.answer, response.score
         except Exception as e:
             logger.error(f"[synthesizer] Failed: {type(e).__name__}: {e}")
             for line in traceback.format_exc().splitlines():
@@ -402,6 +472,56 @@ class ChatWorkflow:
                 "final_answer": "I encountered an error while generating the answer. Please try rephrasing your question.",
                 "current_agent": "synthesizer",
             }
+
+        # Verification is a second model call, so it runs only where it can
+        # change the outcome: a low self-reported confidence, or a thin context.
+        # Verifying every confident answer would double cost to re-confirm
+        # answers that were already fine.
+        checked = self._verify_answer(query, formatted_context, answer, confidence, context_len)
+        if checked:
+            answer, confidence = checked
+
+        logger.info(
+            f"[synthesizer] Answer generated ({len(answer)} chars, confidence={confidence:.2f})"
+        )
+        return {
+            "context": formatted_context,
+            "final_answer": answer,
+            "current_agent": "synthesizer",
+        }
+
+    def _verify_answer(
+        self, query: str, context: str, answer: str, confidence: float, context_len: int
+    ) -> tuple[str, float] | None:
+        """Return a corrected (answer, confidence), or None to keep the draft.
+
+        The verifier never rewrites prose. It only reports whether the answer is
+        supported, and a negative verdict lowers the confidence and appends the
+        gap — because an honest "not in the retrieved context" is more useful
+        to a reader than a confident invention with the same retrieval behind it.
+        """
+        if not self.dspy.enabled:
+            return None
+        if confidence >= 0.7 and context_len >= 800:
+            return None
+
+        verdict = self.dspy.verify(query, context, answer)
+        if verdict is None:
+            return None
+        label, gap = verdict
+        if label == "supported":
+            logger.info("[verify] draft supported — keeping it")
+            return None
+        if not gap or gap.lower() == "none":
+            logger.info("[verify] flagged %s with no specific gap", label)
+            return answer, 0.0
+
+        logger.warning(f"[verify] {label}: {gap[:120]}")
+        disclaimer = (
+            f"\n\n_Note: part of this could not be confirmed from the retrieved "
+            f"context — {gap}._"
+        )
+        return f"{answer}{disclaimer}", 0.0
 
     def _build_graph(self):
         workflow = StateGraph(AgentState)
